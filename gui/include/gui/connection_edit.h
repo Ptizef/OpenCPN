@@ -1,10 +1,4 @@
-/******************************************************************************
- *
- * Project:  OpenCPN
- * Purpose:
- * Author:   David Register
- *
- ***************************************************************************
+/**************************************************************************
  *   Copyright (C) 2022 by David S. Register                               *
  *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
@@ -22,6 +16,11 @@
  *   Free Software Foundation, Inc.,                                       *
  *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,  USA.         *
  ***************************************************************************
+ */
+
+/**
+ * \file
+ * Dialog and support code for editing a connection
  */
 
 #ifndef _CONNECT_EDIT_H
@@ -57,8 +56,7 @@ public:
   const wxString DEFAULT_UDP_OUT_ADDRESS = "255.255.255.255";
 
   ConnectionEditDialog();
-  // ConnectionEditDialog(wxScrolledWindow *container, options *parent);
-  ConnectionEditDialog(options *parent, ConnectionsDialog *client);
+  ConnectionEditDialog(wxWindow *parent);
 
   ~ConnectionEditDialog();
 
@@ -149,7 +147,7 @@ public:
   void ConnectControls();
 
   // private:
-  options *m_parent;
+  wxWindow *m_parent;
   wxScrolledWindow *m_scrolledwin;
 
   wxGridSizer *gSizerNetProps, *gSizerSerProps, *gSizerCanProps;
@@ -177,7 +175,7 @@ public:
   wxRadioButton *m_rbOIgnore, *m_rbTypeCAN;
   wxStaticText *m_stBTPairs, *m_stNetProto, *m_stNetAddr, *m_stNetPort;
   wxStaticText *m_stSerPort, *m_stSerBaudrate, *m_stSerProtocol;
-  wxStaticText *m_stPriority, *m_stFilterSec, *m_stPrecision;
+  wxStaticText *m_stFilterSec, *m_stPrecision;
   wxStaticText *m_stTalkerIdText;
   wxStaticText *m_stNetComment, *m_stSerialComment, *m_stCANSource,
       *m_stAuthToken;

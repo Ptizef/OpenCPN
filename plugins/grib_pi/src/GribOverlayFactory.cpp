@@ -1,10 +1,4 @@
-/******************************************************************************
- *
- * Project:  OpenCPN
- * Purpose:  GRIB Object
- * Author:   David Register
- *
- ***************************************************************************
+/***************************************************************************
  *   Copyright (C) 2014 by David S. Register                               *
  *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
@@ -21,10 +15,11 @@
  *   along with this program; if not, write to the                         *
  *   Free Software Foundation, Inc.,                                       *
  *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,  USA.         *
- ***************************************************************************
- *
+ ***************************************************************************/
+/**
+ * \file
+ * \implements \ref GribOverlayFactory.h
  */
-
 #include "wx/wxprec.h"
 
 #ifndef WX_PRECOMP
@@ -110,20 +105,6 @@ static wxString MToString( int DataCenterModel )
 }
 #endif
 
-#if 0
-static wxString TToString( const wxDateTime date_time, const int time_zone )
-{
-    wxDateTime t( date_time );
-    t.MakeFromTimezone( wxDateTime::UTC );
-    if( t.IsDST() ) t.Subtract( wxTimeSpan( 1, 0, 0, 0 ) );
-    switch( time_zone ) {
-        case 0: return t.Format( _T(" %a %d-%b-%Y  %H:%M "), wxDateTime::Local ) + _T("LOC");//:%S
-        case 1:
-        default: return t.Format( _T(" %a %d-%b-%Y %H:%M  "), wxDateTime::UTC ) + _T("UTC");
-    }
-}
-#endif
-
 #ifdef ocpnUSE_GL
 static GLuint texture_format = 0;
 #endif
@@ -144,7 +125,7 @@ static GLboolean QueryExtension( const char *extName )
     extNameLen = strlen( extName );
 
     p = (char *) glGetString( GL_EXTENSIONS );
-    if( NULL == p ) {
+    if( nullptr == p ) {
         return GL_FALSE;
     }
 
@@ -238,23 +219,23 @@ GRIBOverlayFactory::GRIBOverlayFactory(GRIBUICtrlBar &dlg)
 
   // qDebug() <<  "m_pixelMM: " << m_pixelMM;
 
-  m_pGribTimelineRecordSet = NULL;
+  m_pGribTimelineRecordSet = nullptr;
   m_last_vp_scale = 0.;
 
-  m_oDC = NULL;
+  m_oDC = nullptr;
 #if wxUSE_GRAPHICS_CONTEXT
-  m_gdc = NULL;
+  m_gdc = nullptr;
 #endif
-  m_Font_Message = NULL;
+  m_Font_Message = nullptr;
 
   InitColorsTable();
   for (int i = 0; i < GribOverlaySettings::SETTINGS_COUNT; i++)
-    m_pOverlay[i] = NULL;
+    m_pOverlay[i] = nullptr;
 
-  m_ParticleMap = NULL;
+  m_ParticleMap = nullptr;
   m_tParticleTimer.Connect(
       wxEVT_TIMER, wxTimerEventHandler(GRIBOverlayFactory::OnParticleTimer),
-      NULL, this);
+      nullptr, this);
   m_bUpdateParticles = false;
 
   // Generate the wind arrow cache
@@ -386,7 +367,7 @@ GRIBOverlayFactory::~GRIBOverlayFactory() {
 }
 
 void GRIBOverlayFactory::Reset() {
-  m_pGribTimelineRecordSet = NULL;
+  m_pGribTimelineRecordSet = nullptr;
 
   ClearCachedData();
 }
@@ -394,9 +375,9 @@ void GRIBOverlayFactory::Reset() {
 void GRIBOverlayFactory::SetMessageFont() {
   wxFont fo;
 #ifdef __WXQT__
-  fo = GetOCPNGUIScaledFont_PlugIn(_T("Dialog"));
+  fo = GetOCPNGUIScaledFont_PlugIn(_("Dialog"));
 #else
-  fo = *OCPNGetFont(_("Dialog"), 10);
+  fo = *OCPNGetFont(_("Dialog"), 0);
   fo.SetPointSize(
       (fo.GetPointSize() * g_ContentScaleFactor / OCPN_GetWinDIPScaleFactor()));
 #endif
@@ -414,7 +395,7 @@ void GRIBOverlayFactory::ClearCachedData(void) {
   //    Clear out the cached bitmaps
   for (int i = 0; i < GribOverlaySettings::SETTINGS_COUNT; i++) {
     delete m_pOverlay[i];
-    m_pOverlay[i] = NULL;
+    m_pOverlay[i] = nullptr;
   }
 }
 
@@ -446,9 +427,9 @@ bool GRIBOverlayFactory::RenderGLGribOverlay(wxGLContext *pcontext,
   }
 
   m_oDC->SetVP(vp);
-  m_oDC->SetDC(NULL);
+  m_oDC->SetDC(nullptr);
 
-  m_pdc = NULL;  // inform lower layers that this is OpenGL render
+  m_pdc = nullptr;  // inform lower layers that this is OpenGL render
 
   bool rv = DoRenderGribOverlay(vp);
 
@@ -1251,7 +1232,7 @@ wxImage &GRIBOverlayFactory::getLabel(double value, int settings,
 
   wxScreenDC sdc;
   int w, h;
-  sdc.GetTextExtent(labels, &w, &h, NULL, NULL, &mfont);
+  sdc.GetTextExtent(labels, &w, &h, nullptr, nullptr, &mfont);
 
   int label_offset = 5;
 
@@ -1417,7 +1398,7 @@ void GRIBOverlayFactory::RenderGribIsobar(int settings, GribRecord **pGR,
   SettingsIdToGribId(settings, idx, idy, polar);
   if (idx < 0) return;
 
-  GribRecord *pGRA = pGR[idx], *pGRM = NULL;
+  GribRecord *pGRA = pGR[idx], *pGRM = nullptr;
 
   if (!pGRA) return;
 
@@ -1460,7 +1441,7 @@ void GRIBOverlayFactory::RenderGribIsobar(int settings, GribRecord **pGR,
         wxDateTime now = wxDateTime::Now();
         if ((now - start).GetSeconds() > 3 && press - min < (max - min) / 2) {
           progressdialog = new wxGenericProgressDialog(
-              _("Building Isobar map"), _("Wind"), max - min + 1, NULL,
+              _("Building Isobar map"), _("Wind"), max - min + 1, nullptr,
               wxPD_SMOOTH | wxPD_ELAPSED_TIME | wxPD_REMAINING_TIME);
         }
       }
@@ -1728,7 +1709,7 @@ void GRIBOverlayFactory::RenderGribOverlayMap(int settings, GribRecord **pGR,
   SettingsIdToGribId(settings, idx, idy, polar);
   if (idx < 0 || !pGR[idx]) return;
 
-  GribRecord *pGRA = pGR[idx], *pGRM = NULL;
+  GribRecord *pGRA = pGR[idx], *pGRM = nullptr;
   if (!pGRA) return;
 
   if (idy >= 0 && !polar && pGR[idy]) {
@@ -1836,7 +1817,7 @@ void GRIBOverlayFactory::RenderGribNumbers(int settings, GribRecord **pGR,
   SettingsIdToGribId(settings, idx, idy, polar);
   if (idx < 0) return;
 
-  GribRecord *pGRA = pGR[idx], *pGRM = NULL;
+  GribRecord *pGRA = pGR[idx], *pGRM = nullptr;
 
   if (!pGRA) return;
 
@@ -1854,7 +1835,7 @@ void GRIBOverlayFactory::RenderGribNumbers(int settings, GribRecord **pGR,
 
   // set an arbitrary width for numbers
   int wstring;
-  m_TexFontNumbers.GetTextExtent(_T("1234"), &wstring, NULL);
+  m_TexFontNumbers.GetTextExtent(_T("1234"), &wstring, nullptr);
 
   if (m_Settings.Settings[settings].m_bNumFixSpac) {  // fixed spacing
 
@@ -2004,7 +1985,7 @@ void GRIBOverlayFactory::DrawNumbers(wxPoint p, double value, int settings,
 #else
 
 #ifdef __WXQT__
-    wxFont font = GetOCPNGUIScaledFont_PlugIn(_T("Dialog"));
+    wxFont font = GetOCPNGUIScaledFont_PlugIn(_("Dialog"));
 #else
     wxFont font(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL,
                 wxFONTWEIGHT_NORMAL);
@@ -2306,7 +2287,7 @@ void GRIBOverlayFactory::RenderGribParticles(int settings, GribRecord **pGR,
     int i = it->m_HistoryPos;
 
     bool lip_valid = false;
-    float *lp = NULL, lip[2];
+    float *lp = nullptr, lip[2];
     wxUint8 lc[4];
     float lcf[4];
 

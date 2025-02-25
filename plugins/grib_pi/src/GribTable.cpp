@@ -1,11 +1,5 @@
-/******************************************************************************
- *
- * Project:  OpenCPN
- * Purpose:  GRIB table
- * Author:   David Register
- *
- ***************************************************************************
- *   Copyright (C) 2010 by David S. Register   *
+/***************************************************************************
+ *   Copyright (C) 2010 by David S. Register                               *
  *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
@@ -21,10 +15,11 @@
  *   along with this program; if not, write to the                         *
  *   Free Software Foundation, Inc.,                                       *
  *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,  USA.         *
- ***************************************************************************
- *
+ ***************************************************************************/
+/**
+ * \file
+ * \implements \ref GribTable.h
  */
-
 #include "wx/wxprec.h"
 
 #ifndef WX_PRECOMP
@@ -43,10 +38,6 @@
 
 extern double m_cursor_lat, m_cursor_lon;
 
-//----------------------------------------------------------------------------------------------------------
-//          GRIB Table Implementation
-//----------------------------------------------------------------------------------------------------------
-
 GRIBTable::GRIBTable(GRIBUICtrlBar &parent)
     : GRIBTableBase(&parent), m_pGDialog(&parent) {}
 
@@ -57,7 +48,7 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
 
   // init row attr
   wxGridCellAttr *datarow = new wxGridCellAttr();
-  datarow->SetFont(GetOCPNGUIScaledFont_PlugIn(_T("Dialog")));
+  datarow->SetFont(GetOCPNGUIScaledFont_PlugIn(_("Dialog")));
   datarow->SetAlignment(wxALIGN_CENTRE, wxALIGN_CENTRE);
 
   // populate "cursor position" display
@@ -67,9 +58,8 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
       .Append(toSDMM_PlugIn(2, m_cursor_lon));
   m_pCursorPosition->SetLabel(l);
   m_pCursorPosition->SetFont(
-      GetOCPNGUIScaledFont_PlugIn(_T("Dialog")).MakeBold());
-  m_pPositionText->SetFont(
-      GetOCPNGUIScaledFont_PlugIn(_T("Dialog")).MakeBold());
+      GetOCPNGUIScaledFont_PlugIn(_("Dialog")).MakeBold());
+  m_pPositionText->SetFont(GetOCPNGUIScaledFont_PlugIn(_("Dialog")).MakeBold());
 
   // create as columns as necessary
   m_pGribTable->AppendCols(rsa->GetCount());
@@ -91,7 +81,7 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
 
     GribRecord **RecordArray = pTimeset->m_GribRecordPtrArray;
 
-    /*create and polulate wind data row
+    /*create and populate wind data row
          wind is a special case:
          1) if current unit is not bf ==> double speed display (current unit +
        bf) 2) create two lines for direction and speed and a third for gust if
@@ -127,7 +117,7 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
       }
     }  // wind
 
-    // create and polulate Pressure data rown
+    // create and populate Pressure data rown
     if (m_pGDialog->m_bGRIBActiveFile->m_GribIdxArray.Index(Idx_PRESSURE) !=
         wxNOT_FOUND) {
       nrows++;
@@ -135,7 +125,7 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
       m_pGribTable->SetCellValue(nrows, i, GetPressure(RecordArray));
     }  // pressure
 
-    /*create and polulate Waves data rows
+    /*create and populate Waves data rows
         waves is another special case:
          1) if significant height data exists then create a line for direction
        and height then a third for periode if data exists
@@ -164,7 +154,7 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
       }
     }  // waves
 
-    // create and polulate total rainfall data row
+    // create and populate total rainfall data row
     if (m_pGDialog->m_bGRIBActiveFile->m_GribIdxArray.Index(Idx_PRECIP_TOT) !=
         wxNOT_FOUND) {
       nrows++;
@@ -182,7 +172,7 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
       m_pGribTable->SetCellBackgroundColour(nrows, i, m_pDataCellsColour);
     }  // cloud
 
-    // create and polulate the Air Temperature data row
+    // create and populate the Air Temperature data row
     if (m_pGDialog->m_bGRIBActiveFile->m_GribIdxArray.Index(Idx_AIR_TEMP) !=
         wxNOT_FOUND) {
       nrows++;
@@ -191,7 +181,7 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
       m_pGribTable->SetCellBackgroundColour(nrows, i, m_pDataCellsColour);
     }  // air temp
 
-    // create and polulate the Sea Surface Temperature data row
+    // create and populate the Sea Surface Temperature data row
     if (m_pGDialog->m_bGRIBActiveFile->m_GribIdxArray.Index(Idx_SEA_TEMP) !=
         wxNOT_FOUND) {
       nrows++;
@@ -200,7 +190,7 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
       m_pGribTable->SetCellBackgroundColour(nrows, i, m_pDataCellsColour);
     }  // sea temp
 
-    // create and polulate the Convective Available Potential Energy (CAPE) data
+    // create and populate the Convective Available Potential Energy (CAPE) data
     // row
     if (m_pGDialog->m_bGRIBActiveFile->m_GribIdxArray.Index(Idx_CAPE) !=
         wxNOT_FOUND) {
@@ -210,7 +200,7 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
       m_pGribTable->SetCellBackgroundColour(nrows, i, m_pDataCellsColour);
     }  // cape
 
-    // create and polulate the Composite Reflectivity data row
+    // create and populate the Composite Reflectivity data row
     if (m_pGDialog->m_bGRIBActiveFile->m_GribIdxArray.Index(Idx_COMP_REFL) !=
         wxNOT_FOUND) {
       nrows++;
@@ -220,7 +210,7 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
     }  // composite Reflectivity
 
     /*create and populate the current data rows
-        1)create two lines for direstion and speed
+        1)create two lines for direction and speed
         2) these two or three lines will be part of the same block*/
     if (m_pGDialog->m_bGRIBActiveFile->m_GribIdxArray.Index(
             Idx_SEACURRENT_VX) != wxNOT_FOUND &&
@@ -256,7 +246,7 @@ void GRIBTable::InitGribTable(int zone, ArrayOfGribRecordSets *rsa,
   datarow->DecRef();  // Give up pointer contrl to Grid
 
   m_tScrollToNowTimer.Connect(
-      wxEVT_TIMER, wxTimerEventHandler(GRIBTable::OnScrollToNowTimer), NULL,
+      wxEVT_TIMER, wxTimerEventHandler(GRIBTable::OnScrollToNowTimer), nullptr,
       this);
 }
 

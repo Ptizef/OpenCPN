@@ -31,7 +31,7 @@
 #include <wx/dcscreen.h>
 
 #include "TTYWindow.h"
-#include "TTYScroll.h"
+#include "tty_scroll.h"
 #include "WindowDestroyListener.h"
 #include "color_handler.h"
 #include "ocpn_plugin.h"
@@ -48,14 +48,15 @@ TTYWindow::TTYWindow(wxWindow* parent, int n_lines,
     : m_window_destroy_listener(listener), m_tty_scroll(NULL) {
   wxFrame::Create(
       parent, -1, _T("Title"), wxDefaultPosition, wxDefaultSize,
-      wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxFRAME_FLOAT_ON_PARENT);
+      wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxFRAME_FLOAT_ON_PARENT,
+      "NmeaDebugWindow");
 
   wxBoxSizer* bSizerOuterContainer = new wxBoxSizer(wxVERTICAL);
   SetSizer(bSizerOuterContainer);
 
   m_filter = new wxTextCtrl(this, wxID_ANY);
 
-  m_tty_scroll = new TTYScroll(this, n_lines, *m_filter);
+  m_tty_scroll = new TtyScroll(this, n_lines, *m_filter);
   m_tty_scroll->Scroll(-1, 1000);  // start with full scroll down
 
   bSizerOuterContainer->Add(m_tty_scroll, 1, wxEXPAND, 5);
@@ -76,22 +77,30 @@ TTYWindow::TTYWindow(wxWindow* parent, int n_lines,
   wxBitmapButton* bb = new wxBitmapButton(this, wxID_ANY, m_bm_legend);
   sbSizer1->Add(bb, 1, wxALL | wxEXPAND, 5);
 
-  wxStaticBox* buttonBox = new wxStaticBox(this, wxID_ANY, wxEmptyString);
+  wxStaticBox* buttonBox = new wxStaticBox(this, wxID_ANY, "Tools");
   wxStaticBoxSizer* bbSizer1 = new wxStaticBoxSizer(buttonBox, wxVERTICAL);
 
   m_btn_pause = new wxButton(this, wxID_ANY, _("Pause"), wxDefaultPosition,
                              wxDefaultSize, 0);
-  m_btn_copy = new wxButton(this, wxID_ANY, _("Copy"), wxDefaultPosition,
+  m_btn_copy = new wxButton(this, wxID_ANY, _("Copy all"), wxDefaultPosition,
                             wxDefaultSize, 0);
-  m_btn_copy->SetToolTip(_("Copy NMEA Debug window to clipboard."));
+  m_btn_copy->SetToolTip(_("Copy all NMEA Debug window to clipboard."));
+  m_btn_copy_N0183 = new wxButton(this, wxID_ANY, _("Copy NMEA 0183"),
+                                  wxDefaultPosition, wxDefaultSize, 0);
+  m_btn_copy_N0183->SetToolTip(
+      _("Copy only pure NMEA 0183 sentences to clipboard."));
 
   bbSizer1->Add(m_btn_pause, 0, wxALL, 5);
   bbSizer1->Add(m_btn_copy, 0, wxALL, 5);
+  bbSizer1->Add(m_btn_copy_N0183, 0, wxALL, 5);
   bSizerBottomContainer->Add(bbSizer1, 1, wxALL | wxEXPAND, 5);
 
   m_btn_copy->Connect(wxEVT_COMMAND_BUTTON_CLICKED,
                       wxCommandEventHandler(TTYWindow::OnCopyClick), NULL,
                       this);
+  m_btn_copy_N0183->Connect(wxEVT_COMMAND_BUTTON_CLICKED,
+                            wxCommandEventHandler(TTYWindow::OnCopyN0183Click),
+                            NULL, this);
   m_btn_pause->Connect(wxEVT_COMMAND_BUTTON_CLICKED,
                        wxCommandEventHandler(TTYWindow::OnPauseClick), NULL,
                        this);
@@ -140,6 +149,9 @@ void TTYWindow::CreateLegendBitmap() {
     dc.SetBrush(b2);
     dc.DrawRectangle(boff, y, bsize, bsize);
     dc.SetTextForeground(wxColour(_T("CORAL")));
+    // Indicate message has been filtered and dropped.
+    // This could be an input or output message.
+    // For input messages, only used if m_legacy_input_filter_behaviour is true.
     dc.DrawText(
         _("Input message filtered, output message filtered and dropped"),
         text_x, y);
@@ -155,6 +167,7 @@ void TTYWindow::CreateLegendBitmap() {
     wxBrush b4(wxColour(_T("BLUE")));
     dc.SetBrush(b4);
     dc.DrawRectangle(boff, y, bsize, bsize);
+    // Indicate message has been sent successfully.
     dc.SetTextForeground(wxColour(_T("BLUE")));
     dc.DrawText(_("Output Message"), text_x, y);
 
@@ -163,7 +176,9 @@ void TTYWindow::CreateLegendBitmap() {
     dc.SetBrush(b5);
     dc.DrawRectangle(boff, y, bsize, bsize);
     dc.SetTextForeground(wxColour(_T("RED")));
-    dc.DrawText(_("Information Message or Message with errors"), text_x, y);
+    // Indicate message has error (parse error, wrong checksum, cannot be sent,
+    // etc). This could be an input or output message.
+    dc.DrawText(_("Message with errors"), text_x, y);
   }
   dc.SelectObject(wxNullBitmap);
 }
@@ -181,7 +196,9 @@ void TTYWindow::OnPauseClick(wxCommandEvent&) {
   }
 }
 
-void TTYWindow::OnCopyClick(wxCommandEvent&) { m_tty_scroll->Copy(); }
+void TTYWindow::OnCopyClick(wxCommandEvent&) { m_tty_scroll->Copy(false); }
+
+void TTYWindow::OnCopyN0183Click(wxCommandEvent&) { m_tty_scroll->Copy(true); }
 
 void TTYWindow::OnCloseWindow(wxCloseEvent&) {
   if (m_window_destroy_listener) {

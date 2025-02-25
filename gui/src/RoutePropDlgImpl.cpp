@@ -449,56 +449,6 @@ void RoutePropDlgImpl::UpdatePoints() {
   }
 }
 
-wxDateTime RoutePropDlgImpl::toUsrDateTime(const wxDateTime ts,
-                                           const int format, const double lon) {
-  if (!ts.IsValid()) {
-    return ts;
-  }
-  wxDateTime dt;
-  switch (m_tz_selection) {
-    case 2:  // LMT@Location
-      if (std::isnan(lon)) {
-        dt = wxInvalidDateTime;
-      } else {
-        dt =
-            ts.Add(wxTimeSpan(wxTimeSpan(0, 0, wxLongLong(lon * 3600. / 15.))));
-      }
-      break;
-    case 1:  // Local@PC
-      dt = ts.FromUTC();
-      break;
-    case 0:  // UTC
-      dt = ts;
-      break;
-  }
-  return dt;
-}
-
-wxDateTime RoutePropDlgImpl::fromUsrDateTime(const wxDateTime ts,
-                                             const int format,
-                                             const double lon) {
-  if (!ts.IsValid()) {
-    return ts;
-  }
-  wxDateTime dt;
-  switch (m_tz_selection) {
-    case 2:  // LMT@Location
-      if (std::isnan(lon)) {
-        dt = wxInvalidDateTime;
-      } else {
-        dt = ts.Subtract(wxTimeSpan(0, 0, wxLongLong(lon * 3600. / 15.)));
-      }
-      break;
-    case 1:  // Local@PC
-      dt = ts.ToUTC();
-      break;
-    case 0:  // UTC
-      dt = ts;
-      break;
-  }
-  return dt;
-}
-
 void RoutePropDlgImpl::SetRouteAndUpdate(Route* pR, bool only_points) {
   if (NULL == pR) return;
 
@@ -524,12 +474,12 @@ void RoutePropDlgImpl::SetRouteAndUpdate(Route* pR, bool only_points) {
     if (!pR->m_PlannedDeparture.IsValid())
       pR->m_PlannedDeparture = wxDateTime::Now().ToUTC();
 
-    m_tz_selection = 1;  // Local PC time by default
+    m_tz_selection = LTINPUT;  // Local PC time by default
     if (pR != m_pRoute) {
       if (pR->m_TimeDisplayFormat == RTE_TIME_DISP_UTC)
-        m_tz_selection = 0;
+        m_tz_selection = UTCINPUT;
       else if (pR->m_TimeDisplayFormat == RTE_TIME_DISP_LOCAL)
-        m_tz_selection = 2;
+        m_tz_selection = LMTINPUT;
       m_pEnroutePoint = NULL;
       m_bStartNow = false;
     }
@@ -718,7 +668,7 @@ void RoutePropDlgImpl::WaypointsOnDataViewListCtrlItemEditingDone(
 void RoutePropDlgImpl::WaypointsOnDataViewListCtrlItemValueChanged(
     wxDataViewEvent& event) {
 #if wxCHECK_VERSION(3, 1, 2)
-  // wx 3.0.x crashes in the bellow code
+  // wx 3.0.x crashes in the below code
   if (!m_pRoute) return;
   wxDataViewModel* const model = event.GetModel();
   wxVariant value;
@@ -913,8 +863,7 @@ void RoutePropDlgImpl::OnRoutePropMenuSelected(wxCommandEvent& event) {
       RoutePoint* pRP = m_pRoute->GetPoint(
           static_cast<int>(reinterpret_cast<long long>(selection.GetID())));
 
-      RouteManagerDialog::WptShowPropertiesDialog(std::vector<RoutePoint*>{pRP},
-                                                  this);
+      RouteManagerDialog::WptShowPropertiesDialog(pRP, this);
       break;
     }
   }
@@ -933,14 +882,14 @@ void RoutePropDlgImpl::WaypointsOnDataViewListCtrlItemContextMenu(
     wxMenuItem* delItem =
         new wxMenuItem(&menu, ID_RCLK_MENU_DELETE, _("Remove Selected"));
 #ifdef __ANDROID__
-    wxFont* pf = OCPNGetFont(_T("Menu"), 0);
+    wxFont* pf = OCPNGetFont(_("Menu"), 0);
     editItem->SetFont(*pf);
     moveUpItem->SetFont(*pf);
     moveDownItem->SetFont(*pf);
     delItem->SetFont(*pf);
 #endif
 #if defined(__WXMSW__)
-    wxFont* pf = GetOCPNScaledFont(_T("Menu"));
+    wxFont* pf = GetOCPNScaledFont(_("Menu"));
     editItem->SetFont(*pf);
     moveUpItem->SetFont(*pf);
     moveDownItem->SetFont(*pf);
@@ -970,7 +919,7 @@ void RoutePropDlgImpl::WaypointsOnDataViewListCtrlItemContextMenu(
       new wxMenuItem(&menu, ID_RCLK_MENU_COPY_TEXT, _("&Copy all as text"));
 
 #if defined(__WXMSW__)
-  wxFont* qFont = GetOCPNScaledFont(_T("Menu"));
+  wxFont* qFont = GetOCPNScaledFont(_("Menu"));
   copyItem->SetFont(*qFont);
 #endif
 
@@ -1004,12 +953,13 @@ void RoutePropDlgImpl::SaveChanges() {
         (wxPenStyle)::StyleValues[m_choiceStyle->GetSelection()];
     m_pRoute->m_width = ::WidthValues[m_choiceWidth->GetSelection()];
     switch (m_tz_selection) {
-      case 1:
+      case LTINPUT:
         m_pRoute->m_TimeDisplayFormat = RTE_TIME_DISP_PC;
         break;
-      case 2:
+      case LMTINPUT:
         m_pRoute->m_TimeDisplayFormat = RTE_TIME_DISP_LOCAL;
         break;
+      case UTCINPUT:
       default:
         m_pRoute->m_TimeDisplayFormat = RTE_TIME_DISP_UTC;
     }

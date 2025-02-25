@@ -113,6 +113,16 @@ private:
   RoutePoint* m_pEnroutePoint;
   bool m_bStartNow;
 
+  /**
+   * The timezone to use for formatting the departure date/time.
+   * Possible values are:
+   * - 0: UTC
+   * - 1: Timezone configured in operating system
+   * - 2: Mean solar time at the location, based on the average time it takes
+   * for the sun to cross the meridian (appear at its highest point in the sky)
+   * at that specific location
+   * - 3: Honor OpenCPN global setting for timezone display
+   */
   int m_tz_selection;
 
   wxDataViewColumn* etd_col;
@@ -120,10 +130,7 @@ private:
   wxHyperlinkCtrl* m_pEditedLink;
 
   bool IsThisRouteExtendable();
-  wxDateTime toUsrDateTime(const wxDateTime ts, const int format,
-                           const double lon = INFINITY - INFINITY);
-  wxDateTime fromUsrDateTime(const wxDateTime ts, const int format,
-                             const double lon = INFINITY - INFINITY);
+
   wxString MakeTideInfo(wxString stationName, double lat, double lon,
                         wxDateTime utcTime);
 };

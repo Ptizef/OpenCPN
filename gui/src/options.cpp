@@ -40,28 +40,26 @@
 #include <wx/wx.h>
 #endif
 
-#include <wx/progdlg.h>
-#include <wx/radiobox.h>
-#include <wx/listbox.h>
-#include <wx/imaglist.h>
-#include <wx/display.h>
 #include <wx/choice.h>
-#include <wx/dirdlg.h>
 #include <wx/clrpicker.h>
+#include <wx/dirdlg.h>
+#include <wx/dir.h>
+#include <wx/display.h>
 #include <wx/fontdata.h>
 #include <wx/fontdlg.h>
-#include <wx/stdpaths.h>
-#include <wx/tokenzr.h>
+#include <wx/imaglist.h>
+#include <wx/listbox.h>
 #include <wx/mediactrl.h>
-#include <wx/dir.h>
 #include <wx/odcombo.h>
-#include <wx/statline.h>
+#include <wx/progdlg.h>
+#include <wx/radiobox.h>
 #include <wx/regex.h>
 #include <wx/renderer.h>
+#include <wx/statline.h>
+#include <wx/stdpaths.h>
 #include <wx/textwrapper.h>
+#include <wx/tokenzr.h>
 
-#include "model/comm_drv_factory.h"
-#include "model/comm_util.h"
 #include "conn_params_panel.h"
 
 #if defined(__WXGTK__) || defined(__WXQT__)
@@ -78,6 +76,8 @@
 #include "model/ais_state_vars.h"
 #include "model/ais_target_data.h"
 #include "model/cmdline.h"
+#include "model/comm_drv_factory.h"
+#include "model/comm_util.h"
 #include "model/config_vars.h"
 #include "model/idents.h"
 #include "model/multiplexer.h"
@@ -93,6 +93,7 @@
 #include "chcanv.h"
 #include "cm93.h"
 #include "ConfigMgr.h"
+#include "connections_dlg.h"
 #include "displays.h"
 #include "dychart.h"
 #include "FontMgr.h"
@@ -162,9 +163,6 @@ extern bool g_bUIexpert;
 
 extern wxString* pInit_Chart_Dir;
 extern Multiplexer* g_pMUX;
-extern bool g_bfilter_cogsog;
-extern int g_COGFilterSec;
-extern int g_SOGFilterSec;
 
 extern PlugInManager* g_pi_manager;
 extern ocpnStyle::StyleManager* g_StyleManager;
@@ -1474,6 +1472,7 @@ EVT_BUTTON(ID_APPLY, options::OnApplyClick)
 EVT_BUTTON(xID_OK, options::OnXidOkClick)
 EVT_BUTTON(wxID_CANCEL, options::OnCancelClick)
 EVT_BUTTON(ID_BUTTONFONTCHOOSE, options::OnChooseFont)
+EVT_BUTTON(ID_BUTTONFONT_RESET, options::OnResetFont)
 EVT_BUTTON(ID_BUTTONECDISHELP, options::OnButtonEcdisHelp)
 
 EVT_CHOICE(ID_CHOICE_FONTELEMENT, options::OnFontChoice)
@@ -1506,7 +1505,7 @@ options::options(wxWindow* parent, wxWindowID id, const wxString& caption,
 
   SetExtraStyle(wxWS_EX_BLOCK_EVENTS);
 
-  wxDialog::Create(parent, id, caption, pos, size, style);
+  wxDialog::Create(parent, id, caption, pos, size, style, "Options");
   SetFont(*dialogFont);
 
   CreateControls();
@@ -1862,7 +1861,14 @@ void options::CreatePanel_NMEA(size_t parent, int border_size,
                                int group_item_spacing) {
   m_pNMEAForm = AddPage(parent, _("NMEA"));
 
-  comm_dialog = std::make_shared<ConnectionsDialog>(m_pNMEAForm, this);
+  comm_dialog =
+      std::make_shared<ConnectionsDlg>(m_pNMEAForm, TheConnectionParams());
+  // Hijacks the options | Resize event for use by comm_dialog only.
+  // Needs new solution if other pages also have a need to act on it.
+  Bind(wxEVT_SIZE, [&](wxSizeEvent& ev) {
+    comm_dialog->OnResize();
+    ev.Skip();
+  });
 }
 
 void options::CreatePanel_Ownship(size_t parent, int border_size,
@@ -1990,7 +1996,7 @@ void options::CreatePanel_Ownship(size_t parent, int border_size,
   radarGrid->Add(m_itemRadarRingsUnits, 0, wxALIGN_RIGHT | wxALL, border_size);
 
   wxStaticText* colourText =
-      new wxStaticText(itemPanelShip, wxID_STATIC, _("Range Ring Colour"));
+      new wxStaticText(itemPanelShip, wxID_STATIC, _("Range Ring Color"));
   radarGrid->Add(colourText, 1, wxEXPAND | wxALL, group_item_spacing);
 
   m_colourOwnshipRangeRingColour = new OCPNColourPickerCtrl(
@@ -2103,7 +2109,7 @@ void options::CreatePanel_Ownship(size_t parent, int border_size,
   hTrackGrid->Add(pTrackHighlite, 1, wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL,
                   border_size);
   wxStaticText* trackColourText =
-      new wxStaticText(itemPanelShip, wxID_STATIC, _("Highlight Colour"));
+      new wxStaticText(itemPanelShip, wxID_STATIC, _("Highlight Color"));
   hTrackGrid->Add(trackColourText, 1, wxALIGN_RIGHT | wxALIGN_CENTER_VERTICAL,
                   border_size);
   m_colourTrackLineColour = new OCPNColourPickerCtrl(
@@ -2158,8 +2164,6 @@ void options::CreatePanel_Ownship(size_t parent, int border_size,
 
   dispOwnShipCalcOptionsGrid->Add(pSogCogFromLLDampInterval, 0,
                                   wxALIGN_RIGHT | wxALL, group_item_spacing);
-
-  // DimeControl(itemPanelShip);
 }
 
 void options::CreatePanel_Routes(size_t parent, int border_size,
@@ -2350,7 +2354,7 @@ void options::CreatePanel_Routes(size_t parent, int border_size,
                          wxALIGN_RIGHT | wxALL, border_size);
 
   wxStaticText* waypointrangeringsColour = new wxStaticText(
-      itemPanelRoutes, wxID_STATIC, _("Waypoint Range Ring Colours"));
+      itemPanelRoutes, wxID_STATIC, _("Waypoint Range Ring Colors"));
   waypointradarGrid->Add(waypointrangeringsColour, 1, wxEXPAND | wxALL, 1);
 
   m_colourWaypointRangeRingsColour = new OCPNColourPickerCtrl(
@@ -4671,7 +4675,7 @@ OCPNSoundPanel::OCPNSoundPanel(wxWindow* parent, wxWindowID id,
                                wxString title, wxString checkLegend,
                                wxString selectLegend, wxString* pSoundFile)
     : wxPanel(parent, id, pos, size, wxBORDER_NONE), m_soundPlaying(false) {
-  wxFont* pif = FontMgr::Get().GetFont(_T("Dialog"));
+  wxFont* pif = FontMgr::Get().GetFont(_("Dialog"));
   SetFont(*pif);
 
   m_pSoundFile = pSoundFile;
@@ -5308,16 +5312,12 @@ void options::CreatePanel_UI(size_t parent, int border_size,
       new wxChoice(itemPanelFont, ID_CHOICE_FONTELEMENT, wxDefaultPosition,
                    fontChoiceSize, 0, NULL, wxCB_SORT);
 
-  int nFonts = FontMgr::Get().GetNumFonts();
-  for (int it = 0; it < nFonts; it++) {
-    const wxString& t = FontMgr::Get().GetDialogString(it);
-
-    if (FontMgr::Get().GetConfigString(it).StartsWith(g_locale)) {
-      m_itemFontElementListBox->Append(t);
-    }
+  wxArrayString uniqueStrings = FontMgr::Get().GetDialogStrings(g_locale);
+  for (size_t i = 0; i < uniqueStrings.GetCount(); i++) {
+    m_itemFontElementListBox->Append(uniqueStrings[i]);
   }
 
-  if (nFonts) m_itemFontElementListBox->SetSelection(0);
+  if (uniqueStrings.GetCount()) m_itemFontElementListBox->SetSelection(0);
 
   itemFontStaticBoxSizer->Add(m_itemFontElementListBox, 0, wxALL, border_size);
 
@@ -5331,6 +5331,11 @@ void options::CreatePanel_UI(size_t parent, int border_size,
                    wxDefaultPosition, wxDefaultSize, 0);
   itemFontStaticBoxSizer->Add(itemFontColorButton, 0, wxALL, border_size);
 #endif
+  wxButton* itemFontResetButton =
+      new wxButton(itemPanelFont, ID_BUTTONFONT_RESET, _("Reset to Default"),
+                   wxDefaultPosition, wxDefaultSize, 0);
+  itemFontStaticBoxSizer->Add(itemFontResetButton, 0, wxALL, border_size);
+
   m_textSample = new wxStaticText(itemPanelFont, wxID_ANY, _("Sample"),
                                   wxDefaultPosition, wxDefaultSize, 0);
   itemFontStaticBoxSizer->Add(m_textSample, 0, wxALL, border_size);
@@ -5392,7 +5397,6 @@ void options::CreatePanel_UI(size_t parent, int border_size,
   pToolbarAutoHideCB =
       new wxCheckBox(itemPanelFont, wxID_ANY, _("Enable Toolbar auto-hide"));
   pToolbarAutoHide->Add(pToolbarAutoHideCB, 0, wxALL, group_item_spacing);
-
   pToolbarHideSecs =
       new wxTextCtrl(itemPanelFont, ID_OPTEXTCTRL, _T(""), wxDefaultPosition,
                      wxSize(50, -1), wxTE_RIGHT);
@@ -5400,6 +5404,14 @@ void options::CreatePanel_UI(size_t parent, int border_size,
 
   pToolbarAutoHide->Add(new wxStaticText(itemPanelFont, wxID_ANY, _("seconds")),
                         group_item_spacing);
+
+  auto enable_debug_cb = new wxCheckBox(itemPanelFont, wxID_ANY,
+                                        _("Enable Debug in root context menu"));
+  enable_debug_cb->Bind(wxEVT_CHECKBOX, [enable_debug_cb](wxCommandEvent&) {
+    g_enable_root_menu_debug = enable_debug_cb->IsChecked();
+  });
+  enable_debug_cb->SetValue(g_enable_root_menu_debug);
+  miscOptions->Add(enable_debug_cb, 0, wxALL, group_item_spacing);
 
   wxBoxSizer* pShipsBellsSizer = new wxBoxSizer(wxHORIZONTAL);
   miscOptions->Add(pShipsBellsSizer, 0, wxALL, group_item_spacing);
@@ -5533,6 +5545,30 @@ void options::CreatePanel_UI(size_t parent, int border_size,
 
   miscOptions->Add(sliderSizer, 0, wxEXPAND, 5);
   miscOptions->AddSpacer(20);
+}
+
+void options::OnResetFont(wxCommandEvent& event) {
+  wxString itemElement;
+  int i = m_itemFontElementListBox->GetSelection();
+  if (i >= 0) {
+    itemElement = m_itemFontElementListBox->GetString(i);
+
+    if (FontMgr::Get().ResetFontToDefault(itemElement)) {
+      // Update the sample text with new default font
+      wxFont* pFont = FontMgr::Get().GetFont(itemElement);
+      wxColour colour = FontMgr::Get().GetFontColor(itemElement);
+
+      if (pFont) {
+        m_textSample->SetFont(*pFont);
+        m_textSample->SetForegroundColour(colour);
+        m_textSample->Refresh();
+      }
+      // Force immediate update of UI elements
+      gFrame->UpdateAllFonts();
+      m_bfontChanged = true;
+      OnFontChoice(event);
+    }
+  }
 }
 
 void options::OnAlertEnableButtonClick(wxCommandEvent& event) {
@@ -5769,7 +5805,7 @@ void options::CreateControls(void) {
   wxBoxSizer* buttons = new wxBoxSizer(wxHORIZONTAL);
   itemBoxSizer2->Add(buttons, 0, wxALIGN_RIGHT | wxALL, border_size);
 
-  m_OKButton = new wxButton(itemDialog1, xID_OK, _("OK"));
+  m_OKButton = new wxButton(itemDialog1, xID_OK, _("Ok"));
   m_OKButton->SetDefault();
   buttons->Add(m_OKButton, 0, wxALIGN_CENTER_VERTICAL | wxALL, border_size);
 
@@ -5934,6 +5970,7 @@ void options::SetInitialSettings(void) {
 
   m_returnChanges = 0;  // reset the flags
   m_bfontChanged = false;
+  m_font_element_array.Clear();
 
   b_oldhaveWMM = b_haveWMM;
   auto loader = PluginLoader::getInstance();
@@ -6295,9 +6332,6 @@ void options::SetInitialSettings(void) {
   delete m_pSerialArray;
   m_pSerialArray = NULL;
   m_pSerialArray = EnumerateSerialPorts();
-
-  comm_dialog->SetInitialSettings();
-
   m_bForceNewToolbaronCancel = false;
 }
 
@@ -6793,6 +6827,26 @@ void options::UpdateWorkArrayFromDisplayPanel(void) {
 }
 
 void options::OnApplyClick(wxCommandEvent& event) {
+  ApplyChanges(event);
+
+  // Complete processing
+  //  Force reload of options dialog to pick up font changes, locale changes,
+  //  or other major layout changes
+  if ((m_returnChanges & FONT_CHANGED) ||
+      (m_returnChanges & NEED_NEW_OPTIONS)) {
+    gFrame->PrepareOptionsClose(this, m_returnChanges);
+    if (!(m_returnChanges & FONT_CHANGED_SAFE))
+      gFrame->ScheduleReconfigAndSettingsReload(true, true);
+  } else {
+    //  If we had a config change,
+    //  then schedule a re-entry to the settings dialog
+    if ((m_returnChanges & CONFIG_CHANGED)) {
+      gFrame->ScheduleReconfigAndSettingsReload(true, false);
+    }
+  }
+}
+
+void options::ApplyChanges(wxCommandEvent& event) {
   //::wxBeginBusyCursor();
   // FIXME This function is in ConnectionsDialog StopBTScan();
 
@@ -6864,7 +6918,13 @@ void options::OnApplyClick(wxCommandEvent& event) {
       gFrame->GetPrimaryCanvas()->GetglCanvas()->ResetGridFont();
     }
 #endif
+
     m_returnChanges |= FONT_CHANGED;
+
+    // If the font element changed was not "Dialog", then we don't need a full
+    // reload
+    if (m_font_element_array.Index("Dialog") == wxNOT_FOUND)
+      m_returnChanges |= FONT_CHANGED_SAFE;
   }
 
   // Handle Chart Tab
@@ -7199,12 +7259,13 @@ void options::OnApplyClick(wxCommandEvent& event) {
       MouseZoom::ui_to_config(g_mouse_zoom_sensitivity_ui);
 
   //  Only reload the icons if user has actually visted the UI page
-  if (m_bVisitLang)
+  if (m_bVisitLang) {
     if (pWayPointMan) WayPointmanGui(*pWayPointMan).ReloadRoutepointIcons();
+  }
 
-      // FIXME Move these two
-      // g_NMEAAPBPrecision = m_choicePrecision->GetCurrentSelection();
-      // g_TalkerIdText = m_TalkerIdText->GetValue().MakeUpper();
+  // FIXME Move these two
+  // g_NMEAAPBPrecision = m_choicePrecision->GetCurrentSelection();
+  // g_TalkerIdText = m_TalkerIdText->GetValue().MakeUpper();
 
 #ifdef ocpnUSE_GL
   if (g_bopengl != pOpenGL->GetValue()) m_returnChanges |= GL_CHANGED;
@@ -7396,18 +7457,19 @@ void options::OnApplyClick(wxCommandEvent& event) {
     TideCurrentDataSet.push_back(setName.ToStdString());
   }
 
-  if (event.GetId() != ID_APPLY)  // only on ID_OK
-    g_canvasConfig = m_screenConfig;
+  if (g_canvasConfig != m_screenConfig) m_returnChanges |= CONFIG_CHANGED;
+  g_canvasConfig = m_screenConfig;
 
-  if (event.GetId() == ID_APPLY) {
+  // if (event.GetId() == ID_APPLY)
+  {
     gFrame->ProcessOptionsDialog(m_returnChanges, m_pWorkDirList);
     m_CurrentDirList =
         *m_pWorkDirList;  // Perform a deep copy back to main database.
 
     //  We can clear a few flag bits on "Apply", so they won't be recognised at
-    //  the "OK" click. Their actions have already been accomplished once...
-    m_returnChanges &= ~(CHANGE_CHARTS | FORCE_UPDATE | SCAN_UPDATE);
-    k_charts = 0;
+    //  the "Close" click. Their actions have already been accomplished once...
+    // m_returnChanges &= ~(CHANGE_CHARTS | FORCE_UPDATE | SCAN_UPDATE);
+    // k_charts = 0;
 
     gFrame->RefreshAllCanvas();
   }
@@ -7427,11 +7489,22 @@ void options::OnXidOkClick(wxCommandEvent& event) {
   // second is empty??
   if (event.GetEventObject() == NULL) return;
 
-  OnApplyClick(event);
-  SetReturnCode(m_returnChanges);
-  if (event.GetInt() == wxID_STOP) return;
+  ApplyChanges(event);
+
+  // Complete processing
+  gFrame->PrepareOptionsClose(this, m_returnChanges);
+
+  //  If we had a config change, then do it now
+  if ((m_returnChanges & CONFIG_CHANGED))
+    gFrame->ScheduleReconfigAndSettingsReload(false, false);
+
+  // Special case for "Dialog" font edit
+  if ((m_returnChanges & FONT_CHANGED) &&
+      !(m_returnChanges & FONT_CHANGED_SAFE))
+    gFrame->ScheduleDeleteSettingsDialog();
 
   Finish();
+  Hide();
 }
 
 void options::Finish(void) {
@@ -7449,9 +7522,6 @@ void options::Finish(void) {
   pConfig->SetPath("/Settings");
   pConfig->Write("OptionsSizeX", lastWindowSize.x);
   pConfig->Write("OptionsSizeY", lastWindowSize.y);
-
-  SetReturnCode(m_returnChanges);
-  EndModal(m_returnChanges);
 }
 
 ArrayOfCDI options::GetSelectedChartDirs() {
@@ -7877,6 +7947,7 @@ void options::OnDebugcheckbox1Click(wxCommandEvent& event) { event.Skip(); }
 
 void options::OnCancelClick(wxCommandEvent& event) {
   m_pListbook->ChangeSelection(0);
+  comm_dialog->CancelSettings();
 
   lastWindowPos = GetPosition();
   lastWindowSize = GetSize();
@@ -7887,9 +7958,7 @@ void options::OnCancelClick(wxCommandEvent& event) {
   pConfig->Write("OptionsSizeX", lastWindowSize.x);
   pConfig->Write("OptionsSizeY", lastWindowSize.y);
 
-  int rv = 0;
-  if (m_bForceNewToolbaronCancel) rv = TOOLBAR_CHANGED;
-  EndModal(rv);
+  Hide();
 }
 
 void options::OnClose(wxCloseEvent& event) {
@@ -7905,11 +7974,13 @@ void options::OnClose(wxCloseEvent& event) {
   pConfig->Write("OptionsSizeX", lastWindowSize.x);
   pConfig->Write("OptionsSizeY", lastWindowSize.y);
 
-  EndModal(0);
+  gFrame->PrepareOptionsClose(this, m_returnChanges);
+  Hide();
 }
 
 void options::OnFontChoice(wxCommandEvent& event) {
   wxString sel_text_element = m_itemFontElementListBox->GetStringSelection();
+  m_font_element_array.Add(sel_text_element);
 
   wxFont* pif = FontMgr::Get().GetFont(sel_text_element);
   wxColour init_color = FontMgr::Get().GetFontColor(sel_text_element);
@@ -7926,6 +7997,7 @@ void options::OnChooseFont(wxCommandEvent& event) {
 #endif
 
   wxString sel_text_element = m_itemFontElementListBox->GetStringSelection();
+  m_font_element_array.Add(sel_text_element);
   wxFontData font_data;
 
   wxFont* pif = FontMgr::Get().GetFont(sel_text_element);
@@ -8008,6 +8080,7 @@ void options::OnChooseFont(wxCommandEvent& event) {
 #if defined(__WXGTK__) || defined(__WXQT__)
 void options::OnChooseFontColor(wxCommandEvent& event) {
   wxString sel_text_element = m_itemFontElementListBox->GetStringSelection();
+  m_font_element_array.Add(sel_text_element);
 
   wxColourData colour_data;
 
@@ -8134,6 +8207,8 @@ void options::DoOnPageChange(size_t page) {
 
   //  Sometimes there is a (-1) page selected.
   if (page > 10) return;
+
+  lastSubPage = 0;  // Reset sub-page
 
   lastPage = i;
 
@@ -8612,8 +8687,8 @@ void ChartGroupsUI::PopulateTreeCtrl(wxTreeCtrl* ptc,
       ptc->SetItemText(id, dirname);
       if (pFont) ptc->SetItemFont(id, *pFont);
 
-        // On MacOS, use the default system dialog color, to honor Dark mode.
 #ifndef __WXOSX__
+      // On MacOS, use the default system dialog color, to honor Dark mode.
       ptc->SetItemTextColour(id, col);
 #endif
       ptc->SetItemHasChildren(id);

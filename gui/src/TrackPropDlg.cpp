@@ -49,9 +49,6 @@
 #include "androidUTIL.h"
 #endif
 
-#define UTCINPUT 0
-#define LTINPUT 1   // i.e. this PC local time
-#define LMTINPUT 2  // i.e. the remote location LMT time
 #define INPUT_FORMAT 1
 #define DISPLAY_FORMAT 2
 #define TIMESTAMP_FORMAT 3

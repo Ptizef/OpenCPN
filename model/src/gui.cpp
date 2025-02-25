@@ -21,6 +21,8 @@
  *  \file
  *  Implement gui.h.
  */
+#include <wx/dialog.h>
+#include <wx/frame.h>
 
 #include "model/gui.h"
 

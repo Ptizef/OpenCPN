@@ -232,9 +232,9 @@ enum {
   ID_DBP_I_PITCH,
   ID_DBP_I_HEEL,
   ID_DBP_D_AWA_TWA,
-  ID_DBP_I_GPSLCL,
-  ID_DBP_I_CPULCL,
-  ID_DBP_I_SUNLCL,
+  ID_DBP_I_GPSLCL,  ///< GNSS Clock formatted in local time.
+  ID_DBP_I_CPULCL,  ///< Computer Clock formatted in local time.
+  ID_DBP_I_SUNLCL,  ///< Sunrise/Sunset time formatted in local time.
   ID_DBP_I_ALTI,
   ID_DBP_D_ALTI,
   ID_DBP_I_VMGW,
@@ -3159,7 +3159,13 @@ void dashboard_pi::SetPositionFixEx(PlugIn_Position_Fix_Ex &pfix) {
     }
   }
   if (mPriDateTime >= 6) {  // We prefer the GPS datetime
-    mUTCDateTime.Set(pfix.FixTime);
+    // If GNSS data is available, the value of pfix.FixTime is the GNSS time in
+    // UTC. If GNSS data is not available, the special value 0 is used to
+    // indicate that the time is not valid.
+    if (pfix.FixTime > 0)
+      mUTCDateTime.Set(pfix.FixTime);
+    else
+      mUTCDateTime = wxInvalidDateTime;
     if (mUTCDateTime.IsValid()) {
       mPriDateTime = 6;
       mUTCDateTime = mUTCDateTime.ToUTC();
@@ -4093,7 +4099,7 @@ DashboardPreferencesDialog::DashboardPreferencesDialog(
     : wxDialog(parent, id, _("Dashboard preferences"), wxDefaultPosition,
                wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
 #ifdef __WXQT__
-  wxFont *pF = OCPNGetFont(_T("Dialog"), 0);
+  wxFont *pF = OCPNGetFont(_("Dialog"), 0);
   SetFont(*pF);
 #endif
 
@@ -4884,7 +4890,7 @@ void DashboardPreferencesDialog::OnInstrumentAdd(wxCommandEvent &event) {
   AddInstrumentDlg pdlg((wxWindow *)event.GetEventObject(), wxID_ANY);
 
 #ifdef __OCPN__ANDROID__
-  wxFont *pF = OCPNGetFont(_T("Dialog"), 0);
+  wxFont *pF = OCPNGetFont(_("Dialog"), 0);
   pdlg.SetFont(*pF);
 
   wxSize esize;
@@ -5175,7 +5181,7 @@ AddInstrumentDlg::AddInstrumentDlg(wxWindow *pparent, wxWindowID id)
   m_pListCtrlInstruments->AssignImageList(imglist, wxIMAGE_LIST_SMALL);
   m_pListCtrlInstruments->InsertColumn(0, _("Instruments"));
 
-  wxFont *pF = OCPNGetFont(_T("Dialog"), 0);
+  wxFont *pF = OCPNGetFont(_("Dialog"), 0);
   m_pListCtrlInstruments->SetFont(*pF);
 
 #ifdef __OCPN__ANDROID__
@@ -5545,7 +5551,7 @@ void DashboardWindow::OnContextMenu(wxContextMenuEvent &event) {
   wxMenu *contextMenu = new wxMenu();
 
 #ifdef __WXQT__
-  wxFont *pf = OCPNGetFont(_T("Menu"), 0);
+  wxFont *pf = OCPNGetFont(_("Menu"), 0);
 
   // add stuff
   wxMenuItem *item1 =
@@ -6179,7 +6185,7 @@ bool OCPNFontButton::Create(wxWindow *parent, wxWindowID id,
 void OCPNFontButton::OnButtonClick(wxCommandEvent &WXUNUSED(ev)) {
   // update the wxFontData to be shown in the dialog
   m_data.SetInitialFont(m_selectedFont);
-  wxFont *pF = OCPNGetFont(_T("Dialog"), 0);
+  wxFont *pF = OCPNGetFont(_("Dialog"), 0);
 
 #ifdef __WXGTK__
   // Use a smaller font picker dialog (ocpnGenericFontDialog) for small displays
@@ -6345,7 +6351,7 @@ EditDialog::EditDialog(wxWindow *parent, InstrumentProperties &Properties,
                                        wxDefaultPosition, wxDefaultSize);
   fgSizer2->Add(m_fontPicker6, 0, wxALL, 5);
 
-  m_staticText9 = new wxStaticText(this, wxID_ANY, _("Arrow 1 Colour :"),
+  m_staticText9 = new wxStaticText(this, wxID_ANY, _("Arrow 1 Color :"),
                                    wxDefaultPosition, wxDefaultSize, 0);
   m_staticText9->Wrap(-1);
   fgSizer2->Add(m_staticText9, 0, wxALIGN_CENTER_VERTICAL | wxALL, 5);
@@ -6355,7 +6361,7 @@ EditDialog::EditDialog(wxWindow *parent, InstrumentProperties &Properties,
       wxDefaultSize, wxCLRP_DEFAULT_STYLE);
   fgSizer2->Add(m_colourPicker3, 0, wxALL, 5);
 
-  m_staticText10 = new wxStaticText(this, wxID_ANY, _("Arrow 2 Colour :"),
+  m_staticText10 = new wxStaticText(this, wxID_ANY, _("Arrow 2 Color :"),
                                     wxDefaultPosition, wxDefaultSize, 0);
   m_staticText10->Wrap(-1);
   fgSizer2->Add(m_staticText10, 0, wxALIGN_CENTER_VERTICAL | wxALL, 5);

@@ -358,14 +358,14 @@ if (NOT WIN32 AND NOT APPLE)
   if (NOT OCPN_PEDANTIC)
     add_compile_options(
       "-Wno-unused" "-fexceptions" "-rdynamic" "-fno-strict-aliasing"
-      "-Wno-deprecated-declarations"
+      "-Wno-deprecated-declarations" "-Wno-unknown-pragmas"
     )
   endif ()
   if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang|GNU")
-    if (CMAKE_BUILD_TYPE MATCHES "Debug")
+    #if (CMAKE_BUILD_TYPE MATCHES "Debug")
       string(APPEND CMAKE_CXX_FLAGS_DEBUG " -O0")
       add_compile_options("-O0")
-    endif ()
+    #endif ()
   endif ()
   add_definitions(" -DPREFIX=\\\"${CMAKE_INSTALL_PREFIX}\\\"")
   # profiling with gprof ADD_COMPILE_OPTIONS( -pg )
@@ -776,7 +776,7 @@ set(GUI_HDRS
     ${GUI_HDR_DIR}/concanv.h
     ${GUI_HDR_DIR}/ConfigMgr.h
     ${GUI_HDR_DIR}/connection_edit.h
-    ${GUI_HDR_DIR}/connections_dialog.h
+    ${GUI_HDR_DIR}/connections_dlg.h
     ${GUI_HDR_DIR}/conn_params_panel.h
     ${GUI_HDR_DIR}/DetailSlider.h
     ${GUI_HDR_DIR}/displays.h
@@ -826,6 +826,7 @@ set(GUI_HDRS
     ${GUI_HDR_DIR}/routemanagerdialog.h
     ${GUI_HDR_DIR}/routeman_gui.h
     ${GUI_HDR_DIR}/route_point_gui.h
+    ${GUI_HDR_DIR}/route_validator.h
     ${GUI_HDR_DIR}/routeprintout.h
     ${GUI_HDR_DIR}/RoutePropDlg.h
     ${GUI_HDR_DIR}/RoutePropDlgImpl.h
@@ -856,7 +857,7 @@ set(GUI_HDRS
     ${GUI_HDR_DIR}/track_gui.h
     ${GUI_HDR_DIR}/trackprintout.h
     ${GUI_HDR_DIR}/TrackPropDlg.h
-    ${GUI_HDR_DIR}/TTYScroll.h
+    ${GUI_HDR_DIR}/tty_scroll.h
     ${GUI_HDR_DIR}/TTYWindow.h
     ${GUI_HDR_DIR}/udev_rule_mgr.h
     ${GUI_HDR_DIR}/undo.h
@@ -867,6 +868,7 @@ set(GUI_HDRS
     ${GUI_HDR_DIR}/WindowDestroyListener.h
     ${GUI_HDR_DIR}/WindowDestroyListener.h
 )
+
 set(GUI_SRC_DIR ${CMAKE_SOURCE_DIR}/gui/src)
 set(GUI_SRC
     ${GUI_SRC_DIR}/about.cpp
@@ -894,7 +896,7 @@ set(GUI_SRC
     ${GUI_SRC_DIR}/concanv.cpp
     ${GUI_SRC_DIR}/ConfigMgr.cpp
     ${GUI_SRC_DIR}/connection_edit.cpp
-    ${GUI_SRC_DIR}/connections_dialog.cpp
+    ${GUI_SRC_DIR}/connections_dlg.cpp
     ${GUI_SRC_DIR}/conn_params_panel.cpp
     ${GUI_SRC_DIR}/DetailSlider.cpp
     ${GUI_SRC_DIR}/displays.cpp
@@ -948,6 +950,7 @@ set(GUI_SRC
     ${GUI_SRC_DIR}/routemanagerdialog.cpp
     ${GUI_SRC_DIR}/routeman_gui.cpp
     ${GUI_SRC_DIR}/route_point_gui.cpp
+    ${GUI_SRC_DIR}/route_validator.cpp
     ${GUI_SRC_DIR}/routeprintout.cpp
     ${GUI_SRC_DIR}/RoutePropDlg.cpp
     ${GUI_SRC_DIR}/RoutePropDlgImpl.cpp
@@ -973,13 +976,14 @@ set(GUI_SRC
     ${GUI_SRC_DIR}/track_gui.cpp
     ${GUI_SRC_DIR}/trackprintout.cpp
     ${GUI_SRC_DIR}/TrackPropDlg.cpp
-    ${GUI_SRC_DIR}/TTYScroll.cpp
+    ${GUI_SRC_DIR}/tty_scroll.cpp
     ${GUI_SRC_DIR}/TTYWindow.cpp
     ${GUI_SRC_DIR}/udev_rule_mgr.cpp
     ${GUI_SRC_DIR}/undo.cpp
     ${GUI_SRC_DIR}/update_mgr.cpp
     ${GUI_SRC_DIR}/viewport.cpp
     ${GUI_SRC_DIR}/waypointman_gui.cpp
+
 )
 
 if (NOT QT_ANDROID)
@@ -1019,10 +1023,8 @@ if (NOT MSVC AND NOT APPLE)
   list(APPEND GUI_SRC ${GUI_SRC_DIR}/ocpn_fontdlg.cpp)
 endif ()
 
-
 set(SRCS ${GUI_SRC})
 set(HDRS ${GUI_HDRS})
-
 if (APPLE)
   add_executable(${PACKAGE_NAME} MACOSX_BUNDLE ${HDRS} ${SRCS})
 elseif (WIN32)
@@ -1110,6 +1112,10 @@ if (APPLE)
 endif ()
 
 find_package(Gettext REQUIRED)
+
+# UI components
+add_subdirectory(libs/gui)
+target_link_libraries(${PACKAGE_NAME} PRIVATE ocpn::guilib)
 
 add_subdirectory(libs/ssl_sha1)
 target_link_libraries(${PACKAGE_NAME} PRIVATE ssl::sha1)

@@ -386,10 +386,6 @@ int gHDx_Watchdog;
 bool g_bDebugCM93;
 bool g_bDebugS57;
 
-bool g_bfilter_cogsog;
-int g_COGFilterSec = 1;
-int g_SOGFilterSec;
-
 int g_ChartUpdatePeriod;
 int g_SkewCompUpdatePeriod;
 
@@ -397,6 +393,9 @@ int g_lastClientRectx;
 int g_lastClientRecty;
 int g_lastClientRectw;
 int g_lastClientRecth;
+/**
+ * The width of the physical screen in millimeters.
+ */
 double g_display_size_mm;
 std::vector<size_t> g_config_display_size_mm;
 bool g_config_display_size_manual;
@@ -481,7 +480,27 @@ bool g_bLookAhead;
 bool g_bskew_comp;
 bool g_bopengl;
 bool g_bSoftwareGL;
+/**
+ * Controls how the chart panning and zooming smoothing is done during user
+ * interactions.
+ *
+ * When enabled (true):
+ * - Chart panning has inertia, with smooth acceleration and deceleration
+ * - Mouse wheel zooming is smoothly animated between zoom levels
+ * - Chart overscaled rendering is optimized for smooth transitions
+ * - Chart quilting transitions may be smoother
+ *
+ * When disabled (false):
+ * - Chart panning stops immediately when mouse is released
+ * - Mouse wheel zooming jumps directly between zoom levels without animation
+ * - Rendering may be slightly faster but less visually polished
+ *
+ * Changed through the Display > Advanced > "Smooth Panning/Zooming" checkbox.
+ * Saved to config as user preference.
+ */
 bool g_bsmoothpanzoom;
+// toggle for smooth position jumping
+bool g_bSmoothRecenter = true;
 bool g_fog_overzoom;
 double g_overzoom_emphasis_base;
 bool g_oz_vector_scale;
@@ -506,7 +525,6 @@ S57QueryDialog *g_pObjectQueryDialog;
 std::vector<std::string> TideCurrentDataSet;
 wxString g_TCData_Dir;
 
-bool g_boptionsactive;
 options *g_options;
 bool g_bDeferredInitDone;
 int options_lastPage = 0;
@@ -567,6 +585,14 @@ about *g_pAboutDlgLegacy;
 wxLocale *plocale_def_lang = 0;
 #endif
 
+/**
+ * Global locale setting for OpenCPN UI.
+ *
+ * If not set in config (empty string), uses system default locale.
+ * Stores the language/locale name in format "en_US", "fr_FR", etc.
+ * A valid setting triggers loading the corresponding .mo translation files
+ * from the appropriate locale directory.
+ */
 wxString g_locale;
 wxString g_localeOverride;
 bool g_b_assume_azerty;
@@ -625,7 +651,20 @@ wxString g_config_version_string;
 
 wxString g_CmdSoundString;
 
+/**
+ * Flag to control adaptive UI scaling.
+ *
+ * When true, OpenCPN will automatically maximize the application window
+ * if the pixel density suggests a touch-friendly device.
+ *
+ * This helps ensure better usability on mobile and tablet devices by
+ * providing a full-screen interface optimized for touch interaction.
+ *
+ * @note For the most part, the use of this feature is conditionally compiled
+ * for Android builds only.
+ */
 bool g_bresponsive;
+/** Flag to enable or disable mouse rollover effects in the user interface. */
 bool g_bRollover;
 
 bool b_inCompressAllCharts;
@@ -661,7 +700,8 @@ ChartCanvas *g_focusCanvas;
 ChartCanvas *g_overlayCanvas;
 
 bool b_inCloseWindow;
-extern int ShowNavWarning();
+bool g_disable_main_toolbar;
+bool g_btenhertz;
 
 #ifdef LINUX_CRASHRPT
 wxCrashPrint g_crashprint;
@@ -1108,13 +1148,15 @@ bool MyApp::OnInit() {
   temp_font.SetDefaultEncoding(wxFONTENCODING_SYSTEM);
 
   //      Establish Log File location
-  if (!g_Platform->InitializeLogFile()) return false;
+  if (!g_Platform->InitializeLogFile()) {
+    return false;
+  };
 
 #ifdef __WXMSW__
 
-    //  Un-comment the following to establish a separate console window as a
-    //  target for printf() in Windows
-    //     RedirectIOToConsole();
+  //  Un-comment the following to establish a separate console window as a
+  //  target for printf() in Windows
+  //     RedirectIOToConsole();
 
 #endif
 
@@ -1334,10 +1376,12 @@ bool MyApp::OnInit() {
   }
 
   //  Is this the first run after a clean installation?
-  if (!n_NavMessageShown) g_bFirstRun = true;
+  if (!n_NavMessageShown) {
+    g_bFirstRun = true;
+  }
 
-    //  Now we can set the locale
-    //    using wxWidgets/gettext methodology....
+  //  Now we can set the locale
+  //    using wxWidgets/gettext methodology....
 
 #if wxUSE_XLOCALE || !wxCHECK_VERSION(3, 0, 0)
 
@@ -1400,10 +1444,11 @@ bool MyApp::OnInit() {
   g_Platform->SetUpgradeOptions(vs, g_config_version_string);
 
   //  log deferred log restart message, if it exists.
-  if (!g_Platform->GetLargeLogMessage().IsEmpty())
+  if (!g_Platform->GetLargeLogMessage().IsEmpty()) {
     wxLogMessage(g_Platform->GetLargeLogMessage());
+  }
 
-    //  Validate OpenGL functionality, if selected
+  // Validate OpenGL functionality, if selected
 #ifndef ocpnUSE_GL
   g_bdisable_opengl = true;
   ;
@@ -1412,17 +1457,19 @@ bool MyApp::OnInit() {
   if (g_bdisable_opengl) g_bopengl = false;
 
 #if defined(__linux__) && !defined(__ANDROID__)
-  if (g_bSoftwareGL) setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+  if (g_bSoftwareGL) {
+    setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+  }
 #endif
 
-    // FIXMW (dave) move to frame
-    // g_bTransparentToolbarInOpenGLOK = isTransparentToolbarInOpenGLOK();
+  // FIXMW (dave) move to frame
+  // g_bTransparentToolbarInOpenGLOK = isTransparentToolbarInOpenGLOK();
 
-    // On Windows platforms, establish a default cache managment policy
-    // as allowing OpenCPN a percentage of available physical memory,
-    // not to exceed 1 GB
-    // Note that this logic implies that Windows platforms always use
-    // the memCacheLimit policy, and never use the fallback nCacheLimit policy
+  // On Windows platforms, establish a default cache managment policy
+  // as allowing OpenCPN a percentage of available physical memory,
+  // not to exceed 1 GB
+  // Note that this logic implies that Windows platforms always use
+  // the memCacheLimit policy, and never use the fallback nCacheLimit policy
 #ifdef __WXMSW__
   if (0 == g_memCacheLimit) g_memCacheLimit = (int)(g_mem_total * 0.5);
   g_memCacheLimit =
@@ -1841,6 +1888,9 @@ bool MyApp::OnInit() {
   //      Start up the ViewPort Rotation angle Averaging Timer....
   gFrame->FrameCOGTimer.Start(2000, wxTIMER_CONTINUOUS);
 
+  //      Start up the Ten Hz timer....
+  gFrame->FrameTenHzTimer.Start(100, wxTIMER_CONTINUOUS);
+
   //    wxLogMessage( wxString::Format(_T("OpenCPN Initialized in %ld ms."),
   //    init_sw.Time() ) );
 
@@ -1863,7 +1913,7 @@ bool MyApp::OnInit() {
     // qDebug() << "Showing NavWarning";
     wxMilliSleep(500);
 
-    if (wxID_CANCEL == ShowNavWarning()) {
+    if (!ShowNavWarning()) {
       qDebug() << "Closing due to NavWarning Cancel";
       gFrame->Close();
       androidTerminate();
@@ -1881,7 +1931,7 @@ bool MyApp::OnInit() {
   //  or if the version string has changed at all
   //  We defer until here to allow for localization of the message
   if (!n_NavMessageShown || (vs != g_config_version_string)) {
-    if (wxID_CANCEL == ShowNavWarning()) return false;
+    if (!ShowNavWarning()) return false;
     n_NavMessageShown = 1;
     pConfig->Flush();
   }
@@ -1907,8 +1957,7 @@ bool MyApp::OnInit() {
 
   g_pauimgr->Update();
 
-  for (size_t i = 0; i < TheConnectionParams()->Count(); i++) {
-    ConnectionParams *cp = TheConnectionParams()->Item(i);
+  for (auto *cp : TheConnectionParams()) {
     if (cp->bEnabled) {
       if (cp->GetDSPort().Contains("Serial")) {
         std::string port(cp->Port.ToStdString());
@@ -2038,12 +2087,14 @@ int MyApp::OnExit() {
 #ifdef __WXMSW__
 #ifdef USE_GLU_TESS
 #ifdef USE_GLU_DLL
-  if (s_glu_dll_ready) FreeLibrary(s_hGLU_DLL);  // free the glu32.dll
+  if (s_glu_dll_ready) {
+    FreeLibrary(s_hGLU_DLL);
+  }  // free the glu32.dll
 #endif
 #endif
 #endif
 
-    //      Restore any changed system colors
+  // Restore any changed system colors
 
 #ifdef __WXMSW__
   void RestoreSystemColors(void);

@@ -42,6 +42,7 @@
 #include "model/comm_navmsg_bus.h"
 #include "model/comm_vars.h"
 #include "model/config_vars.h"
+#include "model/cutil.h"
 #include "model/idents.h"
 #include "model/ocpn_types.h"
 #include "model/own_ship.h"
@@ -93,6 +94,7 @@ void ClearNavData(NavData& d) {
 static void SendBasicNavdata(int vflag) {
   auto msg = std::make_shared<BasicNavDataMsg>(
       gLat, gLon, gSog, gCog, gVar, gHdt, vflag, wxDateTime::Now().GetTicks());
+  clock_gettime(CLOCK_MONOTONIC, &msg->set_time);
   AppMsgBus::GetInstance().Notify(std::move(msg));
 }
 
@@ -185,6 +187,7 @@ void CommBridge::OnWatchdogTimer(wxTimerEvent& event) {
     gCog = NAN;
     gRmcDate.Empty();
     gRmcTime.Empty();
+    active_priority_position.recent_active_time = -1;
 
     // Are there any other lower priority sources?
     // If so, adopt that one.
@@ -196,6 +199,8 @@ void CommBridge::OnWatchdogTimer(wxTimerEvent& event) {
   if (m_watchdogs.velocity_watchdog <= 0) {
     gSog = NAN;
     gCog = NAN;
+    active_priority_velocity.recent_active_time = -1;
+
     if (g_nNMEADebug && (m_watchdogs.velocity_watchdog == 0))
       wxLogMessage(_T("   ***Velocity Watchdog timeout..."));
     if (m_watchdogs.velocity_watchdog % 5 == 0) {
@@ -214,6 +219,7 @@ void CommBridge::OnWatchdogTimer(wxTimerEvent& event) {
   m_watchdogs.heading_watchdog--;
   if (m_watchdogs.heading_watchdog <= 0) {
     gHdt = NAN;
+    active_priority_heading.recent_active_time = -1;
     if (g_nNMEADebug && (m_watchdogs.heading_watchdog == 0))
       wxLogMessage(_T("   ***HDT Watchdog timeout..."));
 
@@ -226,6 +232,8 @@ void CommBridge::OnWatchdogTimer(wxTimerEvent& event) {
   m_watchdogs.variation_watchdog--;
   if (m_watchdogs.variation_watchdog <= 0) {
     g_bVAR_Rx = false;
+    active_priority_variation.recent_active_time = -1;
+
     if (g_nNMEADebug && (m_watchdogs.variation_watchdog == 0))
       wxLogMessage(_T("   ***VAR Watchdog timeout..."));
 
@@ -240,6 +248,8 @@ void CommBridge::OnWatchdogTimer(wxTimerEvent& event) {
     g_bSatValid = false;
     g_SatsInView = 0;
     g_priSats = 99;
+    active_priority_satellites.recent_active_time = -1;
+
     if (g_nNMEADebug && (m_watchdogs.satellite_watchdog == 0))
       wxLogMessage(_T("   ***SAT Watchdog timeout..."));
 
@@ -492,6 +502,7 @@ void CommBridge::PresetPriorityContainer(
   pc.active_source = source;
   pc.active_identifier = this_identifier;
   pc.active_source_address = source_address;
+  pc.recent_active_time = -1;
 }
 
 void CommBridge::PresetPriorityContainers() {
@@ -670,6 +681,8 @@ bool CommBridge::HandleN0183_RMC(std::shared_ptr<const Nmea0183Msg> n0183_msg) {
   bool bvalid = true;
   if (!m_decoder.DecodeRMC(str, temp_data)) bvalid = false;
 
+  if (std::isnan(temp_data.gLat) || std::isnan(temp_data.gLon)) return false;
+
   int valid_flag = 0;
   if (EvalPriority(n0183_msg, active_priority_position,
                    priority_map_position)) {
@@ -766,7 +779,6 @@ bool CommBridge::HandleN0183_HDM(std::shared_ptr<const Nmea0183Msg> n0183_msg) {
   if (!m_decoder.DecodeHDM(str, temp_data)) return false;
 
   int valid_flag = 0;
-
   if (EvalPriority(n0183_msg, active_priority_heading, priority_map_heading)) {
     gHdm = temp_data.gHdm;
     MakeHDTFromHDM();
@@ -786,7 +798,6 @@ bool CommBridge::HandleN0183_VTG(std::shared_ptr<const Nmea0183Msg> n0183_msg) {
   if (!m_decoder.DecodeVTG(str, temp_data)) return false;
 
   int valid_flag = 0;
-
   if (EvalPriority(n0183_msg, active_priority_velocity,
                    priority_map_velocity)) {
     gSog = temp_data.gSog;
@@ -808,7 +819,6 @@ bool CommBridge::HandleN0183_GSV(std::shared_ptr<const Nmea0183Msg> n0183_msg) {
   if (!m_decoder.DecodeGSV(str, temp_data)) return false;
 
   int valid_flag = 0;
-
   if (EvalPriority(n0183_msg, active_priority_satellites,
                    priority_map_satellites)) {
     if (temp_data.n_satellites >= 0) {
@@ -830,10 +840,10 @@ bool CommBridge::HandleN0183_GGA(std::shared_ptr<const Nmea0183Msg> n0183_msg) {
 
   bool bvalid = true;
   if (!m_decoder.DecodeGGA(str, temp_data)) bvalid = false;
-  ;
+
+  if (std::isnan(temp_data.gLat) || std::isnan(temp_data.gLon)) return false;
 
   int valid_flag = 0;
-
   if (EvalPriority(n0183_msg, active_priority_position,
                    priority_map_position)) {
     if (bvalid) {
@@ -870,8 +880,9 @@ bool CommBridge::HandleN0183_GLL(std::shared_ptr<const Nmea0183Msg> n0183_msg) {
   bool bvalid = true;
   if (!m_decoder.DecodeGLL(str, temp_data)) bvalid = false;
 
-  int valid_flag = 0;
+  if (std::isnan(temp_data.gLat) || std::isnan(temp_data.gLon)) return false;
 
+  int valid_flag = 0;
   if (EvalPriority(n0183_msg, active_priority_position,
                    priority_map_position)) {
     if (bvalid) {
@@ -1208,19 +1219,37 @@ bool CommBridge::EvalPriority(
   tka.GetNextToken();
   int source_address = atoi(tka.GetNextToken().ToStdString().c_str());
 
+  // Special case priority value linkage:
+  // If this is a "velocity" record, ensure that a "position"
+  // report has been accepted from the same source before accepting the
+  // velocity record.
+  // This ensures that the data source is fully initialized, and is reporting
+  // valid, sensible velocity data.
+  if (!strncmp(active_priority.pcclass.c_str(), "velocity", 8)) {
+    bool pos_ok = false;
+    if (!strcmp(active_priority_position.active_source.c_str(),
+                source.c_str())) {
+      if (active_priority_position.recent_active_time != -1) {
+        pos_ok = true;
+      }
+    }
+    if (!pos_ok) return false;
+  }
+
   // Fetch the established priority for the message
   int this_priority;
 
   auto it = priority_map.find(this_key);
   if (it == priority_map.end()) {
-    // Not found, so make it default highest priority
-    priority_map[this_key] = 0;
+    // Not found, so make it default lowest priority
+    size_t n = priority_map.size();
+    priority_map[this_key] = n;
   }
 
   this_priority = priority_map[this_key];
 
-  for (auto it = priority_map.begin(); it != priority_map.end(); it++) {
-    if (debug_priority)
+  if (debug_priority) {
+    for (auto it = priority_map.begin(); it != priority_map.end(); it++)
       printf("               priority_map:  %s  %d\n", it->first.c_str(),
              it->second);
   }
@@ -1240,6 +1269,8 @@ bool CommBridge::EvalPriority(
     active_priority.active_source = source;
     active_priority.active_identifier = this_identifier;
     active_priority.active_source_address = source_address;
+    wxDateTime now = wxDateTime::Now();
+    active_priority.recent_active_time = now.GetTicks();
 
     if (debug_priority)
       printf("  Restoring high priority: %s %d\n", source.c_str(),
@@ -1338,6 +1369,8 @@ bool CommBridge::EvalPriority(
   active_priority.active_source = source;
   active_priority.active_identifier = this_identifier;
   active_priority.active_source_address = source_address;
+  wxDateTime now = wxDateTime::Now();
+  active_priority.recent_active_time = now.GetTicks();
   if (debug_priority)
     printf("  Accepting high priority: %s %d\n", source.c_str(), this_priority);
 

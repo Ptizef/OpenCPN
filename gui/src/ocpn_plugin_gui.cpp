@@ -1,10 +1,4 @@
-/***************************************************************************
- *
- * Project:  OpenCPN
- * Purpose:  PlugIn GUI API Functions
- * Author:   David Register
- *
- ***************************************************************************
+/**************************************************************************
  *   Copyright (C) 2024 by David S. Register                               *
  *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
@@ -23,7 +17,12 @@
  *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,  USA.         *
  **************************************************************************/
 
-#include "dychart.h"
+/**
+ * \file
+ * PlugIn GUI API Functions
+ */
+
+#include "dychart.h"  // Must be ahead due to buggy GL includes handling
 
 #include <wx/wx.h>
 #include <wx/arrstr.h>
@@ -35,35 +34,39 @@
 #include <wx/string.h>
 #include <wx/window.h>
 
-#include "ocpn_plugin.h"
-#include "pluginmanager.h"
-#include "toolbar.h"
-#include "options.h"
-#include "s52plib.h"
+#include "model/ais_decoder.h"
+#include "model/comm_navmsg_bus.h"
+#include "model/idents.h"
+#include "model/multiplexer.h"
+#include "model/own_ship.h"
 #include "model/plugin_comm.h"
 #include "model/route.h"
 #include "model/track.h"
-#include "routemanagerdialog.h"
-#include "model/multiplexer.h"
-#include "chartdb.h"
-#include "OCPNPlatform.h"
-#include "OCPN_AUIManager.h"
-#include "FontMgr.h"
-#include "gui_lib.h"
-#include "model/ais_decoder.h"
-#include "ocpn_app.h"
-#include "ocpn_frame.h"
-#include "svg_utils.h"
-#include "navutil.h"
-#include "model/comm_navmsg_bus.h"
-#include "chcanv.h"
-#include "piano.h"
-#include "waypointman_gui.h"
-#include "routeman_gui.h"
-#include "glChartCanvas.h"
-#include "SoundFactory.h"
-#include "SystemCmdSound.h"
+
 #include "ais.h"
+#include "chartdb.h"
+#include "chcanv.h"
+#include "ConfigMgr.h"
+#include "FontMgr.h"
+#include "glChartCanvas.h"
+#include "gui_lib.h"
+#include "navutil.h"
+#include "ocpn_app.h"
+#include "OCPN_AUIManager.h"
+#include "ocpn_frame.h"
+#include "OCPNPlatform.h"
+#include "ocpn_plugin.h"
+#include "options.h"
+#include "piano.h"
+#include "pluginmanager.h"
+#include "routemanagerdialog.h"
+#include "routeman_gui.h"
+#include "s52plib.h"
+#include "SoundFactory.h"
+#include "svg_utils.h"
+#include "SystemCmdSound.h"
+#include "toolbar.h"
+#include "waypointman_gui.h"
 
 extern PlugInManager* s_ppim;
 extern MyConfig* pConfig;
@@ -88,7 +91,6 @@ extern std::vector<Track*> g_TrackList;
 extern PlugInManager* g_pi_manager;
 extern s52plib* ps52plib;
 extern wxString ChartListFileName;
-extern bool g_boptionsactive;
 extern options* g_options;
 extern ColorScheme global_color_scheme;
 extern wxArrayString g_locale_catalog_array;
@@ -113,6 +115,8 @@ unsigned int gs_plib_flags;
 extern ChartCanvas* g_focusCanvas;
 extern ChartCanvas* g_overlayCanvas;
 extern bool g_bquiting;
+extern bool g_disable_main_toolbar;
+extern bool g_btenhertz;
 
 WX_DEFINE_ARRAY_PTR(ChartCanvas*, arrayofCanvasPtr);
 extern arrayofCanvasPtr g_canvasArray;
@@ -497,9 +501,8 @@ int AddChartToDBInPlace(wxString& full_path, bool b_RefreshCanvas) {
       // Update group contents
       if (g_pGroupArray) ChartData->ApplyGroupArray(g_pGroupArray);
 
-      if (g_boptionsactive) {
+      if (g_options && g_options->IsShown())
         g_options->UpdateDisplayedChartDirList(ChartData->GetChartDirArray());
-      }
 
       if (b_RefreshCanvas || !gFrame->GetPrimaryCanvas()->GetQuiltMode()) {
         gFrame->ChartsRefresh();
@@ -528,9 +531,8 @@ int RemoveChartFromDBInPlace(wxString& full_path) {
     // Update group contents
     if (g_pGroupArray) ChartData->ApplyGroupArray(g_pGroupArray);
 
-    if (g_boptionsactive) {
+    if (g_options && g_options->IsShown())
       g_options->UpdateDisplayedChartDirList(ChartData->GetChartDirArray());
-    }
 
     gFrame->ChartsRefresh();
   }
@@ -2375,6 +2377,15 @@ void SetGlobalColor(std::string table, std::string name, wxColor color) {
   if (ps52plib) ps52plib->m_chartSymbols.UpdateTableColor(table, name, color);
 }
 
+wxColor GetGlobalColorD(std::string map_name, std::string name) {
+  wxColor ret = wxColor(*wxRED);
+  if (ps52plib) {
+    int i_table = ps52plib->m_chartSymbols.FindColorTable(map_name.c_str());
+    ret = ps52plib->m_chartSymbols.GetwxColor(name.c_str(), i_table);
+  }
+  return ret;
+}
+
 void EnableLatLonGrid(bool enable, int CanvasIndex) {
   if (CanvasIndex < GetCanvasCount()) {
     ChartCanvas* cc = g_canvasArray.Item(CanvasIndex);
@@ -2620,22 +2631,6 @@ void SetTrackingMode(bool enable) {
 }
 bool GetTrackingMode() { return g_bTrackActive; }
 
-void CenterOnOwnship(int CanvasIndex) {
-  if (CanvasIndex < GetCanvasCount()) {
-    ChartCanvas* cc = g_canvasArray.Item(CanvasIndex);
-    if (cc) {
-      if (cc->GetbFollow()) cc->TogglebFollow();
-    }
-  }
-}
-bool GetCenterOnOwnship(int CanvasIndex) {
-  if (CanvasIndex < GetCanvasCount()) {
-    ChartCanvas* cc = g_canvasArray.Item(CanvasIndex);
-    if (cc) return cc->GetbFollow();
-  }
-  return false;
-}
-
 void SetAppColorScheme(PI_ColorScheme cs) {
   gFrame->SetAndApplyColorScheme((ColorScheme)cs);
 }
@@ -2645,4 +2640,100 @@ PI_ColorScheme GetAppColorScheme() {
 
 void RequestWindowRefresh(wxWindow* win, bool eraseBackground) {
   if (win) win->Refresh(eraseBackground);
+}
+
+void EnableSplitScreenLayout(bool enable) {
+  if (g_canvasConfig == 1) {
+    if (enable)
+      return;
+    else {                 // split to single
+      g_canvasConfig = 0;  // 0 => "single canvas"
+      gFrame->CreateCanvasLayout();
+      gFrame->DoChartUpdate();
+    }
+  } else {
+    if (enable) {          // single to split
+      g_canvasConfig = 1;  // 1 => "two canvas"
+      gFrame->CreateCanvasLayout();
+      gFrame->DoChartUpdate();
+    } else {
+      return;
+    }
+  }
+}
+
+// ChartCanvas control utilities
+
+void PluginZoomCanvas(int CanvasIndex, double factor) {
+  if (CanvasIndex < GetCanvasCount()) {
+    ChartCanvas* cc = g_canvasArray.Item(CanvasIndex);
+    if (cc) cc->ZoomCanvasSimple(factor);
+  }
+}
+
+bool GetEnableMainToolbar() { return (!g_disable_main_toolbar); }
+void SetEnableMainToolbar(bool enable) {
+  g_disable_main_toolbar = !enable;
+  if (g_MainToolbar) g_MainToolbar->RefreshToolbar();
+}
+
+void ShowGlobalSettingsDialog() {
+  if (gFrame) gFrame->ScheduleSettingsDialog();
+}
+
+void PluginCenterOwnship(int CanvasIndex) {
+  if (CanvasIndex < GetCanvasCount()) {
+    ChartCanvas* cc = g_canvasArray.Item(CanvasIndex);
+    if (cc) {
+      bool bfollow = cc->GetbFollow();
+      cc->ResetOwnshipOffset();
+      if (bfollow)
+        cc->SetbFollow();
+      else
+        cc->JumpToPosition(gLat, gLon, cc->GetVPScale());
+    }
+  }
+}
+
+void PluginSetFollowMode(int CanvasIndex, bool enable_follow) {
+  if (CanvasIndex < GetCanvasCount()) {
+    ChartCanvas* cc = g_canvasArray.Item(CanvasIndex);
+    if (cc) {
+      if (cc->GetbFollow() != enable_follow) cc->TogglebFollow();
+    }
+  }
+}
+
+bool PluginGetFollowMode(int CanvasIndex) {
+  if (CanvasIndex < GetCanvasCount()) {
+    ChartCanvas* cc = g_canvasArray.Item(CanvasIndex);
+    if (cc) return cc->GetbFollow();
+  }
+  return false;
+}
+
+void EnableCanvasFocusBar(bool enable, int CanvasIndex) {
+  if (CanvasIndex < GetCanvasCount()) {
+    ChartCanvas* cc = g_canvasArray.Item(CanvasIndex);
+    if (cc) cc->SetShowFocusBar(enable);
+  }
+}
+bool GetEnableCanvasFocusBar(int CanvasIndex) {
+  if (CanvasIndex < GetCanvasCount()) {
+    ChartCanvas* cc = g_canvasArray.Item(CanvasIndex);
+    if (cc) return (cc->GetShowFocusBar());
+  }
+  return false;
+}
+
+bool GetEnableTenHertzUpdate() { return g_btenhertz; }
+
+void EnableTenHertzUpdate(bool enable) { g_btenhertz = enable; }
+
+void ConfigFlushAndReload() {
+  if (pConfig) {
+    pConfig->Flush();
+    pConfig->LoadMyConfigRaw(false);
+    pConfig->LoadCanvasConfigs(false);
+  }
 }

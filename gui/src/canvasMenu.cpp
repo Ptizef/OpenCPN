@@ -44,6 +44,7 @@
 #include "model/config_vars.h"
 #include "model/cutil.h"
 #include "model/georef.h"
+#include "model/gui.h"
 #include "model/mdns_cache.h"
 #include "model/mdns_query.h"
 #include "model/nav_object_database.h"
@@ -67,6 +68,7 @@
 #include "navutil.h"
 #include "ocpn_frame.h"
 #include "OCPNPlatform.h"
+#include "NMEALogWindow.h"
 #include "peer_client_dlg.h"
 #include "pluginmanager.h"
 #include "Quilt.h"
@@ -207,6 +209,9 @@ enum {
   ID_DEF_MENU_CURRENTINFO,
   ID_DEF_ZERO_XTE,
 
+  ID_DEF_MENU_DEBUG,
+  ID_DGB_MENU_NMEA_WINDOW,
+
   ID_DEF_MENU_GROUPBASE,  // Must be last entry, as chart group identifiers are
                           // created dynamically
 
@@ -284,7 +289,7 @@ void CanvasMenuHandler::MenuAppend1(wxMenu *menu, int id, wxString label) {
 #endif
 
 #ifdef __ANDROID__
-  wxFont sFont = GetOCPNGUIScaledFont(_T("Menu"));
+  wxFont sFont = GetOCPNGUIScaledFont(_("Menu"));
   item->SetFont(sFont);
 #endif
 
@@ -322,6 +327,8 @@ void CanvasMenuHandler::CanvasPopupMenu(int x, int y, int seltype) {
 #else
   wxMenu *subMenuRedo = new wxMenu("Redo...Ctrl-Y");
 #endif
+  wxMenu *subMenuDebug = new wxMenu("");
+  MenuAppend1(subMenuDebug, ID_DGB_MENU_NMEA_WINDOW, "Show NMEA log window");
 
   wxMenu *menuFocus = contextMenu;  // This is the one that will be shown
 
@@ -703,6 +710,8 @@ void CanvasMenuHandler::CanvasPopupMenu(int x, int y, int seltype) {
       }
     }
   }
+  if (g_enable_root_menu_debug)
+    contextMenu->AppendSubMenu(subMenuDebug, _("Debug"));
 
   if (seltype & SELTYPE_ROUTESEGMENT) {
     if (!g_bBasicMenus && m_pSelectedRoute) {
@@ -1103,10 +1112,10 @@ void CanvasMenuHandler::CanvasPopupMenu(int x, int y, int seltype) {
   androidEnableBackButton(false);
   androidEnableOptionsMenu(false);
 
-  setMenuStyleSheet(menuRoute, GetOCPNGUIScaledFont(_T("Menu")));
-  setMenuStyleSheet(menuWaypoint, GetOCPNGUIScaledFont(_T("Menu")));
-  setMenuStyleSheet(menuTrack, GetOCPNGUIScaledFont(_T("Menu")));
-  setMenuStyleSheet(menuAIS, GetOCPNGUIScaledFont(_T("Menu")));
+  setMenuStyleSheet(menuRoute, GetOCPNGUIScaledFont(_("Menu")));
+  setMenuStyleSheet(menuWaypoint, GetOCPNGUIScaledFont(_("Menu")));
+  setMenuStyleSheet(menuTrack, GetOCPNGUIScaledFont(_("Menu")));
+  setMenuStyleSheet(menuAIS, GetOCPNGUIScaledFont(_("Menu")));
 #endif
 
   parent->PopupMenu(menuFocus, x, y);
@@ -1491,6 +1500,15 @@ void CanvasMenuHandler::PopupMenuHandler(wxCommandEvent &event) {
 
       break;
     }
+
+    case ID_DGB_MENU_NMEA_WINDOW: {
+      if (!wxWindow::FindWindowByName("NmeaDebugWindow")) {
+        auto top_window = wxWindow::FindWindowByName(kTopLevelWindowName);
+        NMEALogWindow::GetInstance().Create(top_window, 35);
+      }
+      wxWindow::FindWindowByName("NmeaDebugWindow")->Show();
+    } break;
+
     case ID_RT_MENU_REVERSE: {
       if (m_pSelectedRoute->m_bIsInLayer) break;
 
@@ -1544,15 +1562,9 @@ void CanvasMenuHandler::PopupMenuHandler(wxCommandEvent &event) {
     }
 
     case ID_RT_MENU_DELETE: {
-      int dlg_return = wxID_YES;
-      if (g_bConfirmObjectDelete) {
-        dlg_return = OCPNMessageBox(
-            parent, _("Are you sure you want to delete this route?"),
-            _("OpenCPN Route Delete"),
-            (long)wxYES_NO | wxCANCEL | wxYES_DEFAULT);
-      }
+      bool confirmed = RouteGui::OnDelete(parent);
 
-      if (dlg_return == wxID_YES) {
+      if (confirmed) {
         if (g_pRouteMan->GetpActiveRoute() == m_pSelectedRoute)
           g_pRouteMan->DeactivateRoute();
 
@@ -1728,7 +1740,7 @@ void CanvasMenuHandler::PopupMenuHandler(wxCommandEvent &event) {
         else {
           SendToGpsDlg dlg;
           dlg.SetWaypoint(m_pFoundRoutePoint);
-          wxFont fo = GetOCPNGUIScaledFont(_T("Dialog"));
+          wxFont fo = GetOCPNGUIScaledFont(_("Dialog"));
           dlg.SetFont(fo);
 
           dlg.Create(NULL, -1, _("Send to GPS") + _T( "..." ), _T(""));
