@@ -32,6 +32,7 @@ set(
   ${MODEL_HDR_DIR}/ais_state_vars.h
   ${MODEL_HDR_DIR}/ais_target_data.h
   ${MODEL_HDR_DIR}/atomic_queue.h
+  ${MODEL_HDR_DIR}/autopilot_output.h
   ${MODEL_HDR_DIR}/base_platform.h
   ${MODEL_HDR_DIR}/catalog_handler.h
   ${MODEL_HDR_DIR}/catalog_parser.h
@@ -72,13 +73,16 @@ set(
   ${MODEL_HDR_DIR}/conn_params.h
   ${MODEL_HDR_DIR}/conn_states.h
   ${MODEL_HDR_DIR}/cutil.h
+  ${MODEL_HDR_DIR}/data_monitor_src.h
+  ${MODEL_HDR_DIR}/datetime.h
   ${MODEL_HDR_DIR}/downloader.h
   ${MODEL_HDR_DIR}/ds_porttype.h
+  ${MODEL_HDR_DIR}/filters_on_disk.h
   ${MODEL_HDR_DIR}/garmin_protocol_mgr.h
   ${MODEL_HDR_DIR}/garmin_wrapper.h
   ${MODEL_HDR_DIR}/geodesic.h
   ${MODEL_HDR_DIR}/georef.h
-  ${MODEL_HDR_DIR}/gui.h
+  ${MODEL_HDR_DIR}/gpx_document.h
   ${MODEL_HDR_DIR}/hyperlink.h
   ${MODEL_HDR_DIR}/idents.h
   ${MODEL_HDR_DIR}/instance_check.h
@@ -93,9 +97,13 @@ set(
   ${MODEL_HDR_DIR}/meteo_points.h
   ${MODEL_HDR_DIR}/multiplexer.h
   ${MODEL_HDR_DIR}/nav_object_database.h
+  ${MODEL_HDR_DIR}/navmsg_filter.h
+  ${MODEL_HDR_DIR}/navobj_db.h
   ${MODEL_HDR_DIR}/navutil_base.h
   ${MODEL_HDR_DIR}/nmea_log.h
   ${MODEL_HDR_DIR}/nmea_ctx_factory.h
+  ${MODEL_HDR_DIR}/notification.h
+  ${MODEL_HDR_DIR}/notification_manager.h
   ${MODEL_HDR_DIR}/ocpn_types.h
   ${MODEL_HDR_DIR}/ocpn_utils.h
   ${MODEL_HDR_DIR}/own_ship.h
@@ -135,6 +143,7 @@ set(SRC
   ${MODEL_SRC_DIR}/ais_decoder.cpp
   ${MODEL_SRC_DIR}/ais_state_vars.cpp
   ${MODEL_SRC_DIR}/ais_target_data.cpp
+  ${MODEL_SRC_DIR}/autopilot_output.cpp
   ${MODEL_SRC_DIR}/base_platform.cpp
   ${MODEL_SRC_DIR}/catalog_handler.cpp
   ${MODEL_SRC_DIR}/catalog_parser.cpp
@@ -173,12 +182,15 @@ set(SRC
   ${MODEL_SRC_DIR}/conn_params.cpp
   ${MODEL_SRC_DIR}/conn_states.cpp
   ${MODEL_SRC_DIR}/cutil.cpp
+  ${MODEL_SRC_DIR}/data_monitor_src.cpp
+  ${MODEL_SRC_DIR}/datetime.cpp
   ${MODEL_SRC_DIR}/downloader.cpp
   ${MODEL_SRC_DIR}/ds_porttype.cpp
+  ${MODEL_SRC_DIR}/filters_on_disk.cpp
   ${MODEL_SRC_DIR}/garmin_protocol_mgr.cpp
   ${MODEL_SRC_DIR}/geodesic.cpp
   ${MODEL_SRC_DIR}/georef.cpp
-  ${MODEL_SRC_DIR}/gui.cpp
+  ${MODEL_SRC_DIR}/gpx_document.cpp
   ${MODEL_SRC_DIR}/hyperlink.cpp
   ${MODEL_SRC_DIR}/instance_handler.cpp
   ${MODEL_SRC_DIR}/ipc_api.cpp
@@ -190,7 +202,11 @@ set(SRC
   ${MODEL_SRC_DIR}/mdns_service.cpp
   ${MODEL_SRC_DIR}/multiplexer.cpp
   ${MODEL_SRC_DIR}/nav_object_database.cpp
+  ${MODEL_SRC_DIR}/navobj_db.cpp
+  ${MODEL_SRC_DIR}/navmsg_filter.cpp
   ${MODEL_SRC_DIR}/navutil_base.cpp
+  ${MODEL_SRC_DIR}/notification.cpp
+  ${MODEL_SRC_DIR}/notification_manager.cpp
   ${MODEL_SRC_DIR}/ocpn_plugin.cpp
   ${MODEL_SRC_DIR}/ocpn_utils.cpp
   ${MODEL_SRC_DIR}/own_ship.cpp
@@ -279,6 +295,7 @@ target_include_directories(
     ${CMAKE_SOURCE_DIR}/model/include
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/libs/sqlite/include
 )
 
 if (LINUX)
@@ -461,6 +478,7 @@ target_link_libraries(
     ocpn::nmea0183
     ocpn::pugixml
     ocpn::rapidjson
+    ocpn::sqlite
     ocpn::s52plib
     ocpn::sound
     ocpn::wxjson

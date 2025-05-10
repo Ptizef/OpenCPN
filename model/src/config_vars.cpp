@@ -68,6 +68,7 @@ int g_maxWPNameLength;
 int g_mbtilesMaxLayers = 2;
 int g_nCOMPortCheck = 32;
 int g_nDepthUnitDisplay = 0;
+int g_netmask_bits = 24;
 int g_NMEAAPBPrecision = 3;
 int g_nNMEADebug = 0;
 int g_nTrackPrecision = 0;
@@ -90,6 +91,7 @@ wxString g_hostname;
 wxString g_SART_sound_file;
 wxString g_TalkerIdText;
 wxString g_winPluginDir;
+wxString g_datetime_format;
 
 static wxConfigBase* the_base_config = 0;
 

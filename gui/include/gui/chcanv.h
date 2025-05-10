@@ -37,6 +37,7 @@
 #include <wx/grid.h>
 #include <wx/wxhtml.h>
 
+#include "model/nmea_log.h"
 #include "ocpndc.h"
 #include "undo.h"
 
@@ -45,6 +46,8 @@
 #include "emboss_data.h"
 #include "S57Sector.h"
 #include "gshhs.h"
+#include "notification_manager_gui.h"
+#include "observable.h"
 
 class wxGLContext;
 class GSHHSChart;
@@ -128,15 +131,28 @@ enum {
 enum { NORTH_UP_MODE, COURSE_UP_MODE, HEAD_UP_MODE };
 
 /**
- * Chart display canvas.
- * Manages the display of charts and overlays. Handles chart loading, panning,
- * zooming, and rendering of charts, routes, tracks, etc.
+ * ChartCanvas - Main chart display and interaction component
+ *
+ * Manages the visualization of nautical charts and all chart-related user
+ * interactions. This class integrates geographic data, user interface elements,
+ * and navigation tools into a comprehensive chart viewing experience. It
+ * handles everything from chart loading and rendering to user gestures, route
+ * planning, and navigation aids.
+ *
+ * ChartCanvas uses ViewPort internally to handle the mathematical
+ * transformations between geographic and screen coordinates. While ViewPort
+ * focuses on the projection math, ChartCanvas manages the actual rendering,
+ * user interaction, and application logic.
+ *
+ * As a wxWindow subclass, it responds to paint, mouse, keyboard, and other
+ * window events, translating them into appropriate chart operations like
+ * panning, zooming, and object manipulation.
  */
 class ChartCanvas : public wxWindow {
   friend class glChartCanvas;
 
 public:
-  ChartCanvas(wxFrame *frame, int canvasIndex);
+  ChartCanvas(wxFrame *frame, int canvasIndex, wxWindow *nmea_log);
   ~ChartCanvas();
 
   void SetupGlCanvas();
@@ -336,6 +352,8 @@ public:
    * in physical pixels, as rounded integer values.
    * @return true if conversion successful, false if coordinates are invalid or
    * out of bounds.
+   *
+   * @see ViewPort::GetPixFromLL() for the underlying coordinate transformation.
    */
   bool GetCanvasPointPix(double rlat, double rlon, wxPoint *r);
 
@@ -356,6 +374,8 @@ public:
    * NaN)
    *         - Resulting pixel values would be too large (>1e6)
    *         In these cases, r is set to INVALID_COORD
+   *
+   * @see ViewPort::GetPixFromLL() for the underlying coordinate transformation
    */
   bool GetCanvasPointPixVP(ViewPort &vp, double rlat, double rlon, wxPoint *r);
 
@@ -371,6 +391,8 @@ public:
    * (x, y) coordinates.
    * @param lon [out] Reference to receive the resulting longitude at the given
    * (x, y) coordinates.
+   *
+   * @see ViewPort::GetLLFromPix() for the underlying coordinate transformation.
    */
   void GetCanvasPixPoint(double x, double y, double &lat, double &lon);
   void WarpPointerDeferred(int x, int y);
@@ -689,10 +711,38 @@ public:
   TCWin *pCwin;
   wxBitmap *pscratch_bm;
   bool m_brepaint_piano;
-  double
-      m_cursor_lon;  //!< The longitude at the mouse cursor position in degrees.
-  double
-      m_cursor_lat;  //!< The latitude at the mouse cursor position in degrees.
+  /**
+   * The longitude in degrees corresponding to the most recently processed
+   * cursor position.
+   *
+   * This variable does NOT continuously track the mouse cursor position. It is
+   * updated only:
+   * 1. When processing left mouse clicks
+   * 2. During panning operations via mouse dragging
+   * 3. When the OnCursorTrackTimerEvent fires after mouse movement stops
+   * 4. During certain object selection and editing operations
+   *
+   * For code that needs the current geographic coordinates under the current
+   * mouse pointer, use GetCanvasPixPoint(mouse_x, mouse_y, lat, lon) instead of
+   * accessing this variable directly.
+   */
+  double m_cursor_lon;
+  /**
+   * The latitude in degrees corresponding to the most recently processed cursor
+   * position.
+   *
+   * This variable does NOT continuously track the mouse cursor position. It is
+   * updated only:
+   * 1. When processing left mouse clicks
+   * 2. During panning operations via mouse dragging
+   * 3. When the OnCursorTrackTimerEvent fires after mouse movement stops
+   * 4. During certain object selection and editing operations
+   *
+   * For code that needs the current geographic coordinates under the current
+   * mouse pointer, use GetCanvasPixPoint(mouse_x, mouse_y, lat, lon) instead of
+   * accessing this variable directly.
+   */
+  double m_cursor_lat;
   wxPoint r_rband;
   double m_prev_rlat;
   double m_prev_rlon;
@@ -786,6 +836,7 @@ private:
 
   ViewPort VPoint;
   void PositionConsole(void);
+  wxWindow *m_nmea_log;
 
   wxColour PredColor();
   wxColour ShipColor();
@@ -930,6 +981,7 @@ private:
   void DrawEmboss(ocpnDC &dc, emboss_data *pemboss);
 
   void ShowBrightnessLevelTimedPopup(int brightness, int min, int max);
+  void HandleNotificationMouseClick();
 
   //    Data
   /** The width of the canvas in physical pixels. */
@@ -1213,6 +1265,9 @@ private:
   void OnJumpEaseTimer(wxTimerEvent &event);
   bool StartSmoothJump(double lat, double lon, double scale_ppm);
 
+  NotificationButton *m_notification_button;
+  NotificationsList *m_NotificationsList;
+  ObservableListener evt_notificationlist_change_listener;
   DECLARE_EVENT_TABLE()
 };
 

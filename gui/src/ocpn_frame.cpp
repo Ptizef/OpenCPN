@@ -73,8 +73,10 @@
 #include "model/local_api.h"
 #include "model/logger.h"
 #include "model/multiplexer.h"
+#include "model/navobj_db.h"
 #include "model/nav_object_database.h"
 #include "model/navutil_base.h"
+#include "model/notification_manager.h"
 #include "model/own_ship.h"
 #include "model/plugin_comm.h"
 #include "model/plugin_loader.h"
@@ -84,7 +86,7 @@
 #include "model/track.h"
 
 #include "dialog_alert.h"
-#include "AboutFrameImpl.h"
+#include "about_frame_impl.h"
 #include "about.h"
 #include "ais.h"
 #include "ais_info_gui.h"
@@ -102,6 +104,7 @@
 #include "concanv.h"
 #include "connections_dlg.h"
 #include "ConfigMgr.h"
+#include "data_monitor.h"
 #include "displays.h"
 #include "dychart.h"
 #include "FontMgr.h"
@@ -115,14 +118,16 @@
 #include "MUIBar.h"
 #include "N2KParser.h"
 #include "navutil.h"
-#include "NMEALogWindow.h"
 #include "ocpn_app.h"
+#include "ocpn_plugin.h"
 #include "OCPN_AUIManager.h"
 #include "ocpn_frame.h"
 #include "OCPNPlatform.h"
 #include "OCPN_Sound.h"
 #include "options.h"
 #include "pluginmanager.h"
+#include "print_dialog.h"
+#include "printout_chart.h"
 #include "routemanagerdialog.h"
 #include "routeman_gui.h"
 #include "route_point_gui.h"
@@ -167,7 +172,7 @@ extern TrackPropDlg *pTrackPropDialog;
 extern GoToPositionDialog *pGoToPositionDialog;
 extern CM93OffsetDialog *g_pCM93OffsetDialog;
 extern S57QueryDialog *g_pObjectQueryDialog;
-extern about *g_pAboutDlgLegacy;
+extern About *g_pAboutDlgLegacy;
 extern AboutFrameImpl *g_pAboutDlg;
 
 extern double vLat, vLon;
@@ -234,8 +239,6 @@ extern int g_COGAvgSec;
 extern ActiveTrack *g_pActiveTrack;
 extern std::vector<Track *> g_TrackList;
 extern double gQueryVar;
-extern wxPrintData *g_printData;
-extern wxPageSetupData *g_pageSetupData;
 extern int g_ChartUpdatePeriod;
 extern int g_SkewCompUpdatePeriod;
 extern bool g_bCourseUp;
@@ -322,6 +325,7 @@ extern bool g_config_display_size_manual;
 extern bool g_PrintingInProgress;
 extern bool g_disable_main_toolbar;
 extern bool g_btenhertz;
+extern bool g_declutter_anchorage;
 
 #ifdef __WXMSW__
 // System color control support
@@ -379,9 +383,58 @@ void SetSystemColors(ColorScheme cs);
 
 static bool LoadAllPlugIns(bool load_enabled) {
   AbstractPlatform::ShowBusySpinner();
-  bool b = PluginLoader::getInstance()->LoadAllPlugIns(load_enabled);
+  bool b = PluginLoader::GetInstance()->LoadAllPlugIns(load_enabled);
   AbstractPlatform::HideBusySpinner();
   return b;
+}
+
+static void LaunchLocalHelp(void) {
+#ifdef __ANDROID__
+  androidLaunchHelpView();
+#else
+  wxString def_lang_canonical = _T("en_US");
+
+#if wxUSE_XLOCALE
+  if (plocale_def_lang)
+    def_lang_canonical = plocale_def_lang->GetCanonicalName();
+#endif
+
+  wxString help_locn = g_Platform->GetSharedDataDir() + _T("doc/help_");
+
+  wxString help_try = help_locn + def_lang_canonical + _T(".html");
+
+  if (!::wxFileExists(help_try)) {
+    help_try = help_locn + _T("en_US") + _T(".html");
+
+    if (!::wxFileExists(help_try)) {
+      help_try = help_locn + _T("web") + _T(".html");
+    }
+
+    if (!::wxFileExists(help_try)) return;
+  }
+
+  wxLaunchDefaultBrowser(wxString(_T("file:///")) + help_try);
+#endif
+}
+
+static void DoHelpDialog(void) {
+#ifndef __ANDROID__
+  if (!g_pAboutDlg) {
+    g_pAboutDlg = new AboutFrameImpl(gFrame);
+  } else {
+    g_pAboutDlg->SetFocus();
+  }
+  g_pAboutDlg->Show();
+
+#else
+  if (!g_pAboutDlgLegacy)
+    g_pAboutDlgLegacy = new About(gFrame, g_Platform->GetSharedDataDir(),
+                                  [] { LaunchLocalHelp(); });
+  else
+    g_pAboutDlgLegacy->SetFocus();
+  g_pAboutDlgLegacy->Show();
+
+#endif
 }
 
 //------------------------------------------------------------------------------
@@ -486,11 +539,11 @@ Please click \"Agree\" and proceed, or \"Cancel\" to quit.\n"));
 
   std::string title = _("Welcome to OpenCPN").ToStdString();
   std::string action = _("Agree").ToStdString();
-  AlertDialog *info_dlg = new AlertDialog(gFrame, title, action);
-  info_dlg->SetInitialSize();
-  info_dlg->AddHtmlContent(html);
-  int agreed = info_dlg->ShowModal();
-  return agreed == wxID_YES;
+  AlertDialog info_dlg(gFrame, title, action);
+  info_dlg.SetInitialSize();
+  info_dlg.AddHtmlContent(html);
+  int agreed = info_dlg.ShowModal();
+  return agreed == wxID_OK;
 #endif
 }
 
@@ -635,7 +688,13 @@ static void onBellsFinishedCB(void *ptr) {
 
 static void OnDriverMsg(const ObservedEvt &ev) {
   auto msg = ev.GetString().ToStdString();
-  OCPNMessageBox(GetTopWindow(), msg, _("Communication Error"));
+  auto &noteman = NotificationManager::GetInstance();
+  noteman.AddNotification(NotificationSeverity::kInformational, msg, 60);
+}
+
+static NmeaLog *GetDataMonitor() {
+  auto w = wxWindow::FindWindowByName(kDataMonitorWindowName);
+  return dynamic_cast<NmeaLog *>(w);
 }
 
 // My frame constructor
@@ -643,7 +702,8 @@ MyFrame::MyFrame(wxFrame *frame, const wxString &title, const wxPoint &pos,
                  const wxSize &size, long style)
     : wxFrame(frame, -1, title, pos, size, style, kTopLevelWindowName),
       comm_overflow_dlg(this),
-      m_connections_dlg(nullptr) {
+      m_connections_dlg(nullptr),
+      m_data_monitor(new DataMonitor(this)) {
   g_current_monitor = wxDisplay::GetFromWindow(this);
 #ifdef __WXOSX__
   // On retina displays there is a difference between the physical size of the
@@ -657,7 +717,7 @@ MyFrame::MyFrame(wxFrame *frame, const wxString &title, const wxPoint &pos,
 #endif
   m_last_track_rotation_ts = 0;
   m_ulLastNMEATicktime = 0;
-
+  m_data_monitor->Hide();
   m_pStatusBar = NULL;
   m_StatusBarFieldCount = g_Platform->GetStatusBarFieldCount();
 
@@ -728,11 +788,13 @@ MyFrame::MyFrame(wxFrame *frame, const wxString &title, const wxPoint &pos,
 
   //    Establish my children
   struct MuxLogCallbacks log_callbacks;
-  log_callbacks.log_is_active = []() {
-    return NMEALogWindow::GetInstance().Active();
+  log_callbacks.log_is_active = [&]() {
+    auto log = GetDataMonitor();
+    return log && log->IsVisible();
   };
-  log_callbacks.log_message = [](const wxString &s) {
-    NMEALogWindow::GetInstance().Add(s);
+  log_callbacks.log_message = [&](Logline ll) {
+    NmeaLog *monitor = GetDataMonitor();
+    if (monitor && monitor->IsVisible()) monitor->Add(ll);
   };
   g_pMUX = new Multiplexer(log_callbacks, g_b_legacy_input_filter_behaviour);
 
@@ -1202,7 +1264,8 @@ void MyFrame::CreateCanvasLayout(bool b_useStoredSize) {
     default:
     case 0:  // a single canvas
       if (!g_canvasArray.GetCount() || !config_array.Item(0)) {
-        cc = new ChartCanvas(this, 0);  // the chart display canvas
+        cc = new ChartCanvas(this, 0,
+                             m_data_monitor);  // the chart display canvas
         g_canvasArray.Add(cc);
       } else {
         cc = g_canvasArray[0];
@@ -1238,7 +1301,7 @@ void MyFrame::CreateCanvasLayout(bool b_useStoredSize) {
 
     case 1: {  // two canvas, horizontal
       if (!g_canvasArray.GetCount() || !g_canvasArray[0]) {
-        cc = new ChartCanvas(this, 0);  // the chart display canvas
+        cc = new ChartCanvas(this, 0, m_data_monitor);  // chart display canvas
         g_canvasArray.Add(cc);
       } else {
         cc = g_canvasArray[0];
@@ -1269,7 +1332,7 @@ void MyFrame::CreateCanvasLayout(bool b_useStoredSize) {
 
       g_pauimgr->GetPane(cc).CenterPane();
 
-      cc = new ChartCanvas(this, 1);  // the chart display canvas
+      cc = new ChartCanvas(this, 1, m_data_monitor);  // chart display canvas
       g_canvasArray.Add(cc);
 
       //  There is not yet a config descriptor for canvas 2, so create one by
@@ -1672,27 +1735,30 @@ void MyFrame::OnCloseWindow(wxCloseEvent &event) {
     if (!watching_anchor && (g_bCruising) && (gSog < 0.5) &&
         (uptime.IsLongerThan(wxTimeSpan(0, 30, 0, 0))))  // pjotrc 2010.02.15
     {
-      //    First, delete any single anchorage waypoint closer than 0.25 NM from
-      //    this point This will prevent clutter and database congestion....
+      //    First, if enabled, delete any single anchorage waypoints closer
+      //    than 0.25 NM from this point
+      //    This will prevent screen clutter and database congestion.
+      if (g_declutter_anchorage) {
+        wxRoutePointListNode *node =
+            pWayPointMan->GetWaypointList()->GetFirst();
+        while (node) {
+          RoutePoint *pr = node->GetData();
+          if (pr->GetName().StartsWith(_T("Anchorage"))) {
+            double a = gLat - pr->m_lat;
+            double b = gLon - pr->m_lon;
+            double l = sqrt((a * a) + (b * b));
 
-      wxRoutePointListNode *node = pWayPointMan->GetWaypointList()->GetFirst();
-      while (node) {
-        RoutePoint *pr = node->GetData();
-        if (pr->GetName().StartsWith(_T("Anchorage"))) {
-          double a = gLat - pr->m_lat;
-          double b = gLon - pr->m_lon;
-          double l = sqrt((a * a) + (b * b));
-
-          // caveat: this is accurate only on the Equator
-          if ((l * 60. * 1852.) < (.25 * 1852.)) {
-            pConfig->DeleteWayPoint(pr);
-            pSelect->DeleteSelectablePoint(pr, SELTYPE_ROUTEPOINT);
-            delete pr;
-            break;
+            // caveat: this is accurate only on the Equator
+            if ((l * 60. * 1852.) < (.25 * 1852.)) {
+              pConfig->DeleteWayPoint(pr);
+              pSelect->DeleteSelectablePoint(pr, SELTYPE_ROUTEPOINT);
+              delete pr;
+              break;
+            }
           }
-        }
 
-        node = node->GetNext();
+          node = node->GetNext();
+        }
       }
 
       wxString name = now.Format();
@@ -1710,12 +1776,8 @@ void MyFrame::OnCloseWindow(wxCloseEvent &event) {
   pConfig->UpdateSettings();
 
   //    Deactivate the PlugIns
-  auto plugin_loader = PluginLoader::getInstance();
-  if (plugin_loader) {
-    plugin_loader->DeactivateAllPlugIns();
-  }
-
-  wxLogMessage(_T("opencpn::MyFrame exiting cleanly."));
+  PluginLoader::GetInstance()->DeactivateAllPlugIns();
+  wxLogMessage("opencpn::MyFrame exiting cleanly.");
 
   quitflag++;
 
@@ -1723,14 +1785,13 @@ void MyFrame::OnCloseWindow(wxCloseEvent &event) {
 
   pConfig->m_pNavObjectChangesSet->reset();
 
+  NavObj_dB::GetInstance().Close();
+
   // Remove any leftover Routes and Waypoints from config file as they were
   // saved to navobj before
   pConfig->DeleteGroup(_T ( "/Routes" ));
   pConfig->DeleteGroup(_T ( "/Marks" ));
   pConfig->Flush();
-
-  delete g_printData;
-  delete g_pageSetupData;
 
   if (g_pAboutDlg) g_pAboutDlg->Destroy();
   if (g_pAboutDlgLegacy) g_pAboutDlgLegacy->Destroy();
@@ -1800,8 +1861,7 @@ void MyFrame::OnCloseWindow(wxCloseEvent &event) {
 
   if (ChartData) ChartData->PurgeCachePlugins();
 
-  if (PluginLoader::getInstance())
-    PluginLoader::getInstance()->UnLoadAllPlugIns();
+  PluginLoader::GetInstance()->UnLoadAllPlugIns();
 
   if (g_pi_manager) {
     delete g_pi_manager;
@@ -1844,8 +1904,6 @@ void MyFrame::OnCloseWindow(wxCloseEvent &event) {
       delete lay;  // automatically removes the layer from list, see Layer dtor
     }
   }
-
-  NMEALogWindow::Shutdown();
 
   ReleaseApiListeners();
 
@@ -2389,11 +2447,12 @@ void MyFrame::OnToolLeftClick(wxCommandEvent &event) {
     }
 
     case ID_MENU_TOOL_NMEA_DBG_LOG:
-      if (!wxWindow::FindWindowByName("NmeaDebugWindow")) {
-        auto top_window = wxWindow::FindWindowByName(kTopLevelWindowName);
-        NMEALogWindow::GetInstance().Create(top_window, 35);
-      }
-      wxWindow::FindWindowByName("NmeaDebugWindow")->Show();
+      m_data_monitor->Show();
+      m_data_monitor->Raise();
+      break;
+
+    case ID_MENU_TOOL_IO_MONITOR:
+      m_data_monitor->Show();
       break;
 
     case ID_MENU_MARK_BOAT: {
@@ -2550,12 +2609,12 @@ void MyFrame::OnToolLeftClick(wxCommandEvent &event) {
 
     case wxID_ABOUT:
     case ID_ABOUT: {
-      g_Platform->DoHelpDialog();
+      DoHelpDialog();
       break;
     }
 
     case wxID_HELP: {
-      g_Platform->LaunchLocalHelp();
+      LaunchLocalHelp();
       break;
     }
 
@@ -3018,10 +3077,8 @@ void MyFrame::ActivateMOB(void) {
   //    The MOB point
   wxDateTime mob_time = wxDateTime::Now();
   wxString mob_label(_("MAN OVERBOARD"));
-  mob_label += _(" at ");
-  mob_label += mob_time.FormatTime();
   mob_label += _(" on ");
-  mob_label += mob_time.FormatISODate();
+  mob_label += ocpn::toUsrDateTimeFormat(mob_time);
 
   RoutePoint *pWP_MOB =
       new RoutePoint(gLat, gLon, _T ( "mob" ), mob_label, wxEmptyString);
@@ -3082,7 +3139,7 @@ void MyFrame::ActivateMOB(void) {
 
   wxString mob_message(_("MAN OVERBOARD"));
   mob_message += _(" Time: ");
-  mob_message += mob_time.Format();
+  mob_message += ocpn::toUsrDateTimeFormat(mob_time);
   mob_message += _("  Position: ");
   mob_message += toSDMM(1, gLat);
   mob_message += _T("   ");
@@ -3095,7 +3152,7 @@ void MyFrame::TrackOn(void) {
 
   g_TrackList.push_back(g_pActiveTrack);
   if (pConfig) pConfig->AddNewTrack(g_pActiveTrack);
-
+  NavObj_dB::GetInstance().AddNewTrack(g_pActiveTrack);
   g_pActiveTrack->Start();
 
   // The main toolbar may still be NULL here, and we will do nothing...
@@ -3117,8 +3174,6 @@ void MyFrame::TrackOn(void) {
   }
 
   wxJSONValue v;
-  wxDateTime now;
-  now = now.Now().ToUTC();
   wxString name = g_pActiveTrack->GetName();
   if (name.IsEmpty()) {
     TrackPoint *tp = g_pActiveTrack->GetPoint(0);
@@ -3148,12 +3203,14 @@ Track *MyFrame::TrackOff(bool do_add_point) {
     g_pActiveTrack->Stop(do_add_point);
 
     if (g_pActiveTrack->GetnPoints() < 2) {
+      NavObj_dB::GetInstance().DeleteTrack(g_pActiveTrack);
       RoutemanGui(*g_pRouteMan).DeleteTrack(g_pActiveTrack);
       return_val = NULL;
     } else {
       if (g_bTrackDaily) {
         Track *pExtendTrack = g_pActiveTrack->DoExtendDaily();
         if (pExtendTrack) {
+          NavObj_dB::GetInstance().DeleteTrack(g_pActiveTrack);
           RoutemanGui(*g_pRouteMan).DeleteTrack(g_pActiveTrack);
           return_val = pExtendTrack;
         }
@@ -3663,7 +3720,7 @@ void MyFrame::RegisterGlobalMenuItems() {
 
   wxMenu *tools_menu = new wxMenu();
   tools_menu->Append(ID_MENU_TOOL_NMEA_DBG_LOG,
-                     _menuText(_("NMEA Debugger"), "Alt-C"));
+                     _menuText(_("Data Monitor"), "Alt-C"));
 #ifndef __WXOSX__
   tools_menu->Append(ID_MENU_TOOL_MEASURE,
                      _menuText(_("Measure Distance"), _T("M")));
@@ -4471,6 +4528,8 @@ bool MyFrame::UpdateChartDatabaseInplace(ArrayOfCDI &DirArray, bool b_force,
   wxLogMessage(_T("Starting chart database Update..."));
   wxString gshhg_chart_loc = gWorldMapLocation;
   gWorldMapLocation = wxEmptyString;
+  // The Update() function may set gWorldMapLocation if at least one of the
+  // directories contains GSHHS files.
   ChartData->Update(DirArray, b_force, pprog);
   ChartData->SaveBinary(ChartListFileName);
   wxLogMessage(_T("Finished chart database Update"));
@@ -4489,6 +4548,8 @@ bool MyFrame::UpdateChartDatabaseInplace(ArrayOfCDI &DirArray, bool b_force,
       ChartCanvas *cc = g_canvasArray.Item(i);
       if (cc) cc->ResetWorldBackgroundChart();
     }
+    // Reset the GSHHS singleton which is used to detect land crossing.
+    gshhsCrossesLandReset();
   }
 
   delete pprog;
@@ -4647,6 +4708,8 @@ void MyFrame::OnInitTimer(wxTimerEvent &event) {
       }
 
       pConfig->LoadNavObjects();
+      NavObj_dB::GetInstance().LoadNavObjects();
+
       //    Re-enable anchor watches if set in config file
       if (!g_AW1GUID.IsEmpty()) {
         pAnchorWatchPoint1 = pWayPointMan->FindRoutePointByGUID(g_AW1GUID);
@@ -4696,7 +4759,7 @@ void MyFrame::OnInitTimer(wxTimerEvent &event) {
       if (m_initializing) break;
       m_initializing = true;
       AbstractPlatform::ShowBusySpinner();
-      PluginLoader::getInstance()->LoadAllPlugIns(true);
+      PluginLoader::GetInstance()->LoadAllPlugIns(true);
       AbstractPlatform::HideBusySpinner();
       //            RequestNewToolbars();
       RequestNewMasterToolbar();
@@ -4967,6 +5030,21 @@ void MyFrame::HandleGPSWatchdogMsg(std::shared_ptr<const GPSWatchdogMsg> msg) {
       bGPSValid = false;
       m_fixtime = 0;  // Invalidate fix time
       if (last_bGPSValid != bGPSValid) UpdateGPSCompassStatusBoxes(true);
+
+      // Possible notification on position watchdog timeout...
+      // if fix has been valid for at least 5 minutes, and then lost,
+      // then post a critical notification
+      if (m_fix_start_time.IsValid()) {
+        wxDateTime now = wxDateTime::Now();
+        wxTimeSpan span = now - m_fix_start_time;
+        if (span.IsLongerThan(wxTimeSpan(0, 5))) {
+          auto &noteman = NotificationManager::GetInstance();
+          std::string msg = "GNSS Position fix lost";
+          noteman.AddNotification(NotificationSeverity::kCritical, msg);
+          m_fix_start_time = wxInvalidDateTime;
+        }
+      }
+
     } else if (msg->wd_source == GPSWatchdogMsg::WDSource::velocity) {
       bool last_bVelocityValid = bVelocityValid;
       bVelocityValid = false;
@@ -5023,6 +5101,11 @@ void MyFrame::HandleBasicNavMsg(std::shared_ptr<const BasicNavDataMsg> msg) {
 
   if (((msg->vflag & POS_UPDATE) == POS_UPDATE) &&
       ((msg->vflag & POS_VALID) == POS_VALID)) {
+    // Maintain valid fix start time
+    if (!m_fix_start_time.IsValid()) {
+      m_fix_start_time = wxDateTime::Now();
+    }
+
     // Check the position change, looking for a valid new fix.
     double dist, brg;
     DistanceBearingMercator(gLat, gLon, gLat_gt, gLon_gt, &brg, &dist);
@@ -5106,6 +5189,18 @@ void MyFrame::HandleBasicNavMsg(std::shared_ptr<const BasicNavDataMsg> msg) {
   }
 
   if ((msg->vflag & HDT_UPDATE) == HDT_UPDATE) {
+#if 0
+// Lowpass filter, 10 samples
+static double hdt_avg;
+    double hdt_norm = gHdt;
+    if(gHdt > 180) hdt_norm -= 360;
+
+    hdt_avg *= 0.9;
+    hdt_avg +=  hdt_norm * 0.1;
+    gHdt = hdt_avg;
+    if( gHdt < 0) gHdt += 360.;
+#endif
+
     if (!std::isnan(gHdt)) {
       // Prepare to estimate the gHdt from prior ground truth measurements
       uint64_t hdt_time_gt_last = hdt_time_gt;
@@ -5708,7 +5803,8 @@ void MyFrame::OnFrameTimer1(wxTimerEvent &event) {
       if (!bGPSValid) cc->SetOwnShipState(SHIP_INVALID);
 
       if ((bGPSValid != m_last_bGPSValid) ||
-          (bVelocityValid != m_last_bVelocityValid)) {
+          (bVelocityValid != m_last_bVelocityValid) ||
+          (!isnan(gHdt) && (gHdt != m_last_hdt))) {
         if (!g_bopengl) cc->UpdateShips();
 
         bnew_view = true;  // force a full Refresh()
@@ -5718,12 +5814,13 @@ void MyFrame::OnFrameTimer1(wxTimerEvent &event) {
 
   m_last_bGPSValid = bGPSValid;
   m_last_bVelocityValid = bVelocityValid;
+  m_last_hdt = gHdt;
 
   //    If any PlugIn requested dynamic overlay callbacks, force a full canvas
   //    refresh thus, ensuring at least 1 Hz. callback.
   bool brq_dynamic = false;
   if (g_pi_manager) {
-    auto *pplugin_array = PluginLoader::getInstance()->GetPlugInArray();
+    auto *pplugin_array = PluginLoader::GetInstance()->GetPlugInArray();
     for (unsigned int i = 0; i < pplugin_array->GetCount(); i++) {
       PlugInContainer *pic = pplugin_array->Item(i);
       if (pic->m_enabled && pic->m_init_state) {
@@ -5847,7 +5944,7 @@ void MyFrame::OnFrameTimer1(wxTimerEvent &event) {
 
 double MyFrame::GetMag(double a, double lat, double lon) {
   double Variance = std::isnan(gVar) ? g_UserVar : gVar;
-  auto loader = PluginLoader::getInstance();
+  auto loader = PluginLoader::GetInstance();
   if (loader && loader->IsPlugInAvailable(_T("WMM"))) {
     // Request variation at a specific lat/lon
 
@@ -6309,41 +6406,20 @@ void MyFrame::DoPrint(void) {
 #endif
     Refresh();
 
-  if (NULL == g_printData) {
-    g_printData = new wxPrintData;
-    g_printData->SetOrientation(wxLANDSCAPE);
-    g_pageSetupData = new wxPageSetupDialogData;
+  ChartPrintout printout;
+  if (g_bopengl) {
+    printout.GenerateGLbmp();
   }
-
-  wxPrintDialogData printDialogData(*g_printData);
-  printDialogData.EnablePageNumbers(false);
-
-  wxPrinter printer(&printDialogData);
-
-  MyPrintout printout(wxT("Chart Print"));
-
-  //  In OperGL mode, make the bitmap capture of the screen before the print
-  //  method starts as to be sure the "Abort..." dialog does not appear on
-  //  the image
-  if (g_bopengl) printout.GenerateGLbmp();
-
-  if (!printer.Print(this, &printout, true)) {
-    if (wxPrinter::GetLastError() == wxPRINTER_ERROR)
-      OCPNMessageBox(NULL,
-                     _("There was a problem printing.\nPerhaps your current "
-                       "printer is not set correctly?"),
-                     _T("OpenCPN"), wxOK);
-    //        else
-    //            OCPNMessageBox(_T("Print Cancelled"), _T("OpenCPN"), wxOK);
-  } else {
-    (*g_printData) = printer.GetPrintDialogData().GetPrintData();
-  }
+  auto &printer = PrintDialog::GetInstance();
+  printer.Initialize(wxLANDSCAPE);
+  printer.EnablePageNumbers(false);
+  printer.Print(this, &printout);
 
   // Pass two printout objects: for preview, and possible printing.
   /*
    wxPrintDialogData printDialogData(* g_printData);
-   wxPrintPreview *preview = new wxPrintPreview(new MyPrintout, new MyPrintout,
-   & printDialogData); if (!preview->Ok())
+   wxPrintPreview *preview = new wxPrintPreview(new MyPrintout, new
+   MyPrintout, & printDialogData); if (!preview->Ok())
    {
    delete preview;
    OCPNMessageBox(_T("There was a problem previewing.\nPerhaps your current
@@ -6720,10 +6796,8 @@ void MyFrame::ActivateAISMOBRoute(const AisTargetData *ptarget) {
   //    The MOB point
   wxDateTime mob_time = wxDateTime::Now();
   wxString mob_label(_("AIS MAN OVERBOARD"));
-  mob_label += _(" at ");
-  mob_label += mob_time.FormatTime();
   mob_label += _(" on ");
-  mob_label += mob_time.FormatISODate();
+  mob_label += ocpn::toUsrDateTimeFormat(mob_time);
 
   RoutePoint *pWP_MOB = new RoutePoint(ptarget->Lat, ptarget->Lon, _T ( "mob" ),
                                        mob_label, wxEmptyString);
@@ -6779,7 +6853,7 @@ void MyFrame::ActivateAISMOBRoute(const AisTargetData *ptarget) {
 
   wxString mob_message(_("AIS MAN OVERBOARD"));
   mob_message += _(" Time: ");
-  mob_message += mob_time.Format();
+  mob_message += ocpn::toUsrDateTimeFormat(mob_time);
   mob_message += _("  Ownship Position: ");
   mob_message += toSDMM(1, gLat);
   mob_message += _T("   ");
@@ -6820,7 +6894,7 @@ void MyFrame::UpdateAISMOBRoute(const AisTargetData *ptarget) {
 
     wxString mob_message(_("AIS MAN OVERBOARD UPDATE"));
     mob_message += _(" Time: ");
-    mob_message += mob_time.Format();
+    mob_message += ocpn::toUsrDateTimeFormat(mob_time);
     mob_message += _("  Ownship Position: ");
     mob_message += toSDMM(1, gLat);
     mob_message += _T("   ");
@@ -6870,9 +6944,11 @@ void MyFrame::applySettingsString(wxString settings) {
 
   if (previous_expert != g_bUIexpert) b_newToolbar = true;
 
-  if (rr & TOOLBAR_CHANGED) b_newToolbar = true;
+  if (rr & TOOLBAR_CHANGED) {
+    b_newToolbar = true;
+  }
 
-    //  We do this is one case only to remove an orphan recovery window
+  //  We do this is one case only to remove an orphan recovery window
 #ifdef __ANDROID__
   if (previous_expert && !g_bUIexpert) {
     androidForceFullRepaint();
@@ -6913,9 +6989,7 @@ void MyFrame::applySettingsString(wxString settings) {
   if (console) console->Raise();
 
   Refresh(false);
-
-  if (NMEALogWindow::GetInstance().Active())
-    NMEALogWindow::GetInstance().GetTTYWindow()->Raise();
+  if (m_data_monitor->IsVisible()) m_data_monitor->Raise();
 }
 
 #ifdef wxHAS_POWER_EVENTS
@@ -7786,8 +7860,8 @@ void ApplyLocale() {
   //  Compliant Plugins will reload their locale message catalog during the
   //  Init() method. So it is sufficient to simply deactivate, and then
   //  re-activate, all "active" plugins.
-  PluginLoader::getInstance()->DeactivateAllPlugIns();
-  PluginLoader::getInstance()->UpdatePlugIns();
+  PluginLoader::GetInstance()->DeactivateAllPlugIns();
+  PluginLoader::GetInstance()->UpdatePlugIns();
 
   //         // Make sure the perspective saved in the config file is
   //         "reasonable"

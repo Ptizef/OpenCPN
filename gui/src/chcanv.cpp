@@ -48,6 +48,7 @@
 #include "model/gui.h"
 #include "model/idents.h"
 #include "model/multiplexer.h"
+#include "model/notification_manager.h"
 #include "model/nav_object_database.h"
 #include "model/navutil_base.h"
 #include "model/own_ship.h"
@@ -83,7 +84,6 @@
 #include "mbtiles.h"
 #include "MUIBar.h"
 #include "navutil.h"
-#include "NMEALogWindow.h"
 #include "OCPN_AUIManager.h"
 #include "ocpndc.h"
 #include "ocpn_frame.h"
@@ -123,6 +123,8 @@
 
 #ifdef ocpnUSE_GL
 #include "glChartCanvas.h"
+#include "notification_manager_gui.h"
+#include "model/notification_manager.h"
 #endif
 
 #ifdef __VISUALC__
@@ -310,11 +312,29 @@ extern bool g_bDeferredInitDone;
 
 extern wxString g_CmdSoundString;
 ShapeBaseChartSet gShapeBasemap;
+extern bool g_CanvasHideNotificationIcon;
 
 //  TODO why are these static?
-/** The current mouse X position in canvas coordinates (physical pixels). */
+
+/**
+ * The current mouse X position in physical pixels relative to the active
+ * canvas.
+ *
+ * - (0,0) represents the top-left corner of the chart area within the canvas.
+ * - This is updated during mouse events via MouseEventSetup()
+ * - In multi-canvas configurations, this represents the position within
+ *   the canvas receiving mouse events.
+ */
 static int mouse_x;
-/** The current mouse Y position in canvas coordinates (physical pixels). */
+/**
+ * The current mouse Y position in physical pixels relative to the active
+ * canvas.
+ *
+ * - (0,0) represents the top-left corner of the chart area within the canvas.
+ * - This is updated during mouse events via MouseEventSetup()
+ * - In multi-canvas configurations, this represents the position within
+ *   the canvas receiving mouse events.
+ */
 static int mouse_y;
 static bool mouse_leftisdown;
 
@@ -406,8 +426,9 @@ EVT_TIMER(JUMP_EASE_TIMER, ChartCanvas::OnJumpEaseTimer)
 END_EVENT_TABLE()
 
 // Define a constructor for my canvas
-ChartCanvas::ChartCanvas(wxFrame *frame, int canvasIndex)
-    : wxWindow(frame, wxID_ANY, wxPoint(20, 20), wxSize(5, 5), wxNO_BORDER) {
+ChartCanvas::ChartCanvas(wxFrame *frame, int canvasIndex, wxWindow *nmea_log)
+    : wxWindow(frame, wxID_ANY, wxPoint(20, 20), wxSize(5, 5), wxNO_BORDER),
+      m_nmea_log(nmea_log) {
   parent_frame = (MyFrame *)frame;  // save a pointer to parent
   m_canvasIndex = canvasIndex;
 
@@ -516,6 +537,8 @@ ChartCanvas::ChartCanvas(wxFrame *frame, int canvasIndex)
   m_bpersistent_quilt = false;
   m_piano_ctx_menu = NULL;
   m_Compass = NULL;
+  m_NotificationsList = NULL;
+  m_notification_button = NULL;
 
   g_ChartNotRenderScaleFactor = 2.0;
   m_bShowScaleInStatusBar = true;
@@ -783,6 +806,10 @@ ChartCanvas::ChartCanvas(wxFrame *frame, int canvasIndex)
   m_Compass->SetScaleFactor(g_compass_scalefactor);
   m_Compass->Show(m_bShowCompassWin && g_bShowCompassWin);
 
+  m_notification_button = new NotificationButton(this);
+  m_notification_button->SetScaleFactor(g_compass_scalefactor);
+  m_notification_button->Show(true);
+
   m_pianoFrozen = false;
 
   SetMinSize(wxSize(200, 200));
@@ -816,6 +843,19 @@ ChartCanvas::ChartCanvas(wxFrame *frame, int canvasIndex)
     Bind(wxEVT_MOTION, &ChartCanvas::OnMotion, this);
   }
 #endif
+
+  // Listen for notification events
+  auto &noteman = NotificationManager::GetInstance();
+
+  wxDEFINE_EVENT(EVT_NOTIFICATIONLIST_CHANGE, wxCommandEvent);
+  evt_notificationlist_change_listener.Listen(
+      noteman.evt_notificationlist_change, this, EVT_NOTIFICATIONLIST_CHANGE);
+  Bind(EVT_NOTIFICATIONLIST_CHANGE, [&](wxCommandEvent &) {
+    if (m_NotificationsList && m_NotificationsList->IsShown()) {
+      m_NotificationsList->ReloadNotificationList();
+    }
+    Refresh();
+  });
 }
 
 ChartCanvas::~ChartCanvas() {
@@ -1231,6 +1271,7 @@ void ChartCanvas::ApplyGlobalSettings() {
     m_Compass->Show(m_bShowCompassWin && g_bShowCompassWin);
     if (m_bShowCompassWin && g_bShowCompassWin) m_Compass->UpdateStatus();
   }
+  m_notification_button->UpdateStatus();
 }
 
 void ChartCanvas::CheckGroupValid(bool showMessage, bool switchGroup0) {
@@ -2875,10 +2916,6 @@ void ChartCanvas::OnKeyDown(wxKeyEvent &event) {
 
 #ifndef __WXOSX__
     case WXK_F9: {
-      double t0 = wxGetLocalTimeMillis().ToDouble();
-      pConfig->Flush();
-      double t1 = wxGetLocalTimeMillis().ToDouble() - t0;
-
       ToggleCanvasQuiltMode();
       break;
     }
@@ -2892,12 +2929,9 @@ void ChartCanvas::OnKeyDown(wxKeyEvent &event) {
     case WXK_F12: {
       if (m_modkeys == wxMOD_ALT) {
         // m_nMeasureState = *(volatile int *)(0);  // generate a fault for
-        // testing
-        bool b = GetEnableTenHertzUpdate();
-        EnableTenHertzUpdate(!b);
-        UpdateGPSCompassStatusBox(true);
-      } else
+      } else {
         ToggleChartOutlines();
+      }
       break;
     }
 
@@ -3050,11 +3084,8 @@ void ChartCanvas::OnKeyDown(wxKeyEvent &event) {
         }
 
         case 'E':
-          if (!wxWindow::FindWindowByName("NmeaDebugWindow")) {
-            auto top_window = wxWindow::FindWindowByName(kTopLevelWindowName);
-            NMEALogWindow::GetInstance().Create(top_window, 35);
-          }
-          wxWindow::FindWindowByName("NmeaDebugWindow")->Show();
+          m_nmea_log->Show();
+          m_nmea_log->Raise();
           break;
 
         case 'L':
@@ -5085,6 +5116,10 @@ bool ChartCanvas::PanCanvas(double dx, double dy) {
     }
 
     if (new_ref_dbIndex == -1) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+      // The compiler sees a -1 index being used. Does not happen, though.
+
       // for whatever reason, no reference chart is known
       // Probably panned out of the coverage region
       // If any charts are anywhere on-screen, choose the smallest
@@ -5107,6 +5142,7 @@ bool ChartCanvas::PanCanvas(double dx, double dy) {
                      VPoint.rotation);
         ReloadVP();
       }
+#pragma GCC diagnostic pop
     }
   }
 
@@ -5388,10 +5424,8 @@ bool ChartCanvas::SetViewPoint(double lat, double lon, double scale_ppm,
 
   // recompute cursor position
   // and send to interested plugins if the mouse is actually in this window
-
-  const wxPoint pt = wxGetMousePosition();
-  int mouseX = pt.x - GetScreenPosition().x;
-  int mouseY = pt.y - GetScreenPosition().y;
+  int mouseX = mouse_x;
+  int mouseY = mouse_y;
   if ((mouseX > 0) && (mouseX < VPoint.pix_width) && (mouseY > 0) &&
       (mouseY < VPoint.pix_height)) {
     double lat, lon;
@@ -5592,12 +5626,14 @@ bool ChartCanvas::SetViewPoint(double lat, double lon, double scale_ppm,
         //  Allow the quilt to adjust the new ViewPort for performance
         //  optimization This will normally be only a fractional (i.e.
         //  sub-pixel) adjustment...
-        if (b_adjust) m_pQuilt->AdjustQuiltVP(last_vp, VPoint);
+        if (b_adjust) {
+          m_pQuilt->AdjustQuiltVP(last_vp, VPoint);
+        }
 
-          //                ChartData->ClearCacheInUseFlags();
-          //                unsigned long hash1 = m_pQuilt->GetXStackHash();
+        //                ChartData->ClearCacheInUseFlags();
+        //                unsigned long hash1 = m_pQuilt->GetXStackHash();
 
-          //                wxStopWatch sw;
+        //                wxStopWatch sw;
 
 #ifdef __ANDROID__
         // This is an optimization for panning on touch screen systems.
@@ -7352,6 +7388,7 @@ void ChartCanvas::FindRoutePointsAtCursor(float selectRadius,
 
     //    Get an array of all routes using this point
     m_pEditRouteArray = g_pRouteMan->GetRouteArrayContaining(frp);
+    // TODO: delete m_pEditRouteArray after use?
 
     // Use route array to determine actual visibility for the point
     bool brp_viz = false;
@@ -7404,13 +7441,24 @@ bool ChartCanvas::MouseEventOverlayWindows(wxMouseEvent &event) {
      * The m_Compass->GetRect() coordinates are in physical pixels, whereas the
      * mouse event coordinates are in logical pixels.
      */
-    wxRect logicalRect = m_Compass->GetLogicalRect();
-    bool isInCompass = m_Compass && m_Compass->IsShown() &&
-                       logicalRect.Contains(event.GetPosition());
-    if (isInCompass) {
-      if (m_Compass->MouseEvent(event)) {
-        cursor_region = CENTER;
-        if (!g_btouch) SetCanvasCursor(event);
+    if (m_Compass && m_Compass->IsShown()) {
+      wxRect logicalRect = m_Compass->GetLogicalRect();
+      bool isInCompass = logicalRect.Contains(event.GetPosition());
+      if (isInCompass) {
+        if (m_Compass->MouseEvent(event)) {
+          cursor_region = CENTER;
+          if (!g_btouch) SetCanvasCursor(event);
+          return true;
+        }
+      }
+    }
+
+    if (m_notification_button && m_notification_button->IsShown()) {
+      wxRect logicalRect = m_notification_button->GetLogicalRect();
+      bool isinButton = logicalRect.Contains(event.GetPosition());
+      if (isinButton) {
+        SetCursor(*pCursorArrow);
+        if (event.LeftDown()) HandleNotificationMouseClick();
         return true;
       }
     }
@@ -7426,6 +7474,35 @@ bool ChartCanvas::MouseEventOverlayWindows(wxMouseEvent &event) {
   return false;
 }
 
+void ChartCanvas::HandleNotificationMouseClick() {
+  if (!m_NotificationsList) {
+    m_NotificationsList = new NotificationsList(this);
+
+    // calculate best size for Notification list
+
+    wxPoint ClientUpperRight = ClientToScreen(wxPoint(GetSize().x, 0));
+    wxPoint list_bottom = ClientToScreen(wxPoint(0, GetSize().y / 2));
+    int size_y = list_bottom.y - (ClientUpperRight.y + 5);
+    size_y -= GetCharHeight();
+    size_y = wxMax(size_y, 200);  // ensure always big enough to see
+
+    m_NotificationsList->SetSize(wxSize(GetCharWidth() * 80, size_y));
+
+    wxPoint m_currentNLPos = ClientToScreen(wxPoint(
+        GetSize().x / 2, m_notification_button->GetRect().y +
+                             m_notification_button->GetRect().height + 5));
+
+    m_NotificationsList->Move(m_currentNLPos);
+    m_NotificationsList->Hide();
+  }
+
+  if (m_NotificationsList->IsShown()) {
+    m_NotificationsList->Hide();
+  } else {
+    m_NotificationsList->ReloadNotificationList();
+    m_NotificationsList->Show();
+  }
+}
 bool ChartCanvas::MouseEventChartBar(wxMouseEvent &event) {
   if (!g_bShowChartBar) return false;
 
@@ -8099,6 +8176,7 @@ bool ChartCanvas::MouseEventProcessObjects(wxMouseEvent &event) {
                 break;
               }
             }
+            delete proute_array;
             if (!brp_viz &&
                 frp->IsShared())  // is not visible as part of route, but still
                                   // exists as a waypoint
@@ -8200,6 +8278,7 @@ bool ChartCanvas::MouseEventProcessObjects(wxMouseEvent &event) {
                 break;
               }
             }
+            delete proute_array;
             if (!brp_viz &&
                 pNearbyPoint->IsShared())  // is not visible as part of route,
                                            // but still exists as a waypoint
@@ -9162,6 +9241,7 @@ bool ChartCanvas::MouseEventProcessObjects(wxMouseEvent &event) {
                     pr->m_bIsBeingEdited = false;
                   }
                 }
+                delete lastEditRouteArray;
               }
             }
           }
@@ -9796,6 +9876,11 @@ bool ChartCanvas::MouseEventProcessObjects(wxMouseEvent &event) {
 bool panleftIsDown;
 
 bool ChartCanvas::MouseEventProcessCanvas(wxMouseEvent &event) {
+  // Skip all mouse processing if shift is held.
+  // This allows plugins to implement shift+drag behaviors.
+  if (event.ShiftDown()) {
+    return false;
+  }
   int x, y;
   event.GetPosition(&x, &y);
 
@@ -10629,7 +10714,7 @@ void pupHandler_PasteTrack() {
 bool ChartCanvas::InvokeCanvasMenu(int x, int y, int seltype) {
   m_canvasMenu = new CanvasMenuHandler(this, m_pSelectedRoute, m_pSelectedTrack,
                                        m_pFoundRoutePoint, m_FoundAIS_MMSI,
-                                       m_pIDXCandidate);
+                                       m_pIDXCandidate, m_nmea_log);
 
   Connect(
       wxEVT_COMMAND_MENU_SELECTED,
@@ -11167,6 +11252,7 @@ void ChartCanvas::RenderRouteLegs(ocpnDC &dc) {
   }
 
   wxString routeInfo;
+  double varBrg = 0;
   if (g_bShowTrue)
     routeInfo << wxString::Format(wxString("%03d%c(T) ", wxConvUTF8), (int)brg,
                                   0x00B0);
@@ -11174,13 +11260,24 @@ void ChartCanvas::RenderRouteLegs(ocpnDC &dc) {
   if (g_bShowMag) {
     double latAverage = (m_cursor_lat + render_lat) / 2;
     double lonAverage = (m_cursor_lon + render_lon) / 2;
-    double varBrg = gFrame->GetMag(brg, latAverage, lonAverage);
+    varBrg = gFrame->GetMag(brg, latAverage, lonAverage);
 
     routeInfo << wxString::Format(wxString("%03d%c(M) ", wxConvUTF8),
                                   (int)varBrg, 0x00B0);
   }
-
   routeInfo << _T(" ") << FormatDistanceAdaptive(dist);
+
+  // To make it easier to use a route as a bearing on a charted object add for
+  // the first leg also the reverse bearing.
+  if (np == 1) {
+    routeInfo << "\nReverse: ";
+    if (g_bShowTrue)
+      routeInfo << wxString::Format(wxString("%03d%c(T) ", wxConvUTF8),
+                                    (int)(brg + 180.) % 360, 0x00B0);
+    if (g_bShowMag)
+      routeInfo << wxString::Format(wxString("%03d%c(M) ", wxConvUTF8),
+                                    (int)(varBrg + 180.) % 360, 0x00B0);
+  }
 
   wxString s0;
   if (!route->m_bIsInLayer)
@@ -11396,6 +11493,11 @@ void ChartCanvas::OnPaint(wxPaintEvent &event) {
     if (ru.Contains(compassRect) != wxOutRegion) {
       ru.Subtract(compassRect);
     }
+  }
+
+  wxRect noteRect = m_notification_button->GetRect();
+  if (ru.Contains(noteRect) != wxOutRegion) {
+    ru.Subtract(noteRect);
   }
 
   //  Is this viewpoint the same as the previously painted one?
@@ -11791,29 +11893,11 @@ void ChartCanvas::OnPaint(wxPaintEvent &event) {
   // May get an unexpected OnPaint call while switching display modes
   // Guard for that.
   if (!g_bopengl) {
-    //    Draw the rest of the overlay objects directly on the scratch dc
     ocpnDC scratch_dc(mscratch_dc);
-    DrawOverlayObjects(scratch_dc, ru);
-
-    if (m_bShowTide) {
-      RebuildTideSelectList(GetVP().GetBBox());
-      DrawAllTidesInBBox(scratch_dc, GetVP().GetBBox());
-    }
-
-    if (m_bShowCurrent) {
-      RebuildCurrentSelectList(GetVP().GetBBox());
-      DrawAllCurrentsInBBox(scratch_dc, GetVP().GetBBox());
-    }
-
-    if (m_brepaint_piano && g_bShowChartBar) {
-      m_Piano->Paint(GetClientSize().y - m_Piano->GetHeight(), mscratch_dc);
-    }
-
-    if (m_Compass) m_Compass->Paint(scratch_dc);
-
     RenderAlertMessage(mscratch_dc, GetVP());
   }
 
+#if 0
   // quiting?
   if (g_bquiting) {
 #ifdef ocpnUSE_DIBSECTION
@@ -11838,6 +11922,8 @@ void ChartCanvas::OnPaint(wxPaintEvent &event) {
 
     q_dc.SelectObject(wxNullBitmap);
   }
+#endif
+
 #if 0
     //  It is possible that this two-step method may be reuired for some platforms.
     //  So, retain in the code base to aid recovery if necessary
@@ -11926,6 +12012,10 @@ void ChartCanvas::OnPaint(wxPaintEvent &event) {
     }
   }
 
+  //  Now that charts are fully rendered, apply the overlay objects as decals.
+  ocpnDC scratch_dc(mscratch_dc);
+  DrawOverlayObjects(scratch_dc, ru);
+
   //    And finally, blit the scratch dc onto the physical dc
   wxRegionIterator upd_final(rgn_blit);
   while (upd_final) {
@@ -11934,20 +12024,6 @@ void ChartCanvas::OnPaint(wxPaintEvent &event) {
             rect.y);
     upd_final++;
   }
-
-  //  Test code to validate the dc drawing rectangle....
-  /*
-      wxRegionIterator upd_ru ( rgn_blit ); // get the update rect list
-       while ( upd_ru )
-       {
-       wxRect rect = upd_ru.GetRect();
-
-       dc.SetPen(wxPen(*wxRED));
-       dc.SetBrush(wxBrush(*wxRED, wxTRANSPARENT));
-       dc.DrawRectangle(rect);
-       upd_ru ++ ;
-       }
-  */
 
   //    Deselect the chart bitmap from the temp_dc, so that it will not be
   //    destroyed in the temp_dc dtor
@@ -12335,6 +12411,17 @@ void ChartCanvas::DrawOverlayObjects(ocpnDC &dc, const wxRegion &ru) {
     g_pi_manager->RenderAllCanvasOverlayPlugIns(dc, GetVP(), m_canvasIndex,
                                                 OVERLAY_OVER_EMBOSS);
   }
+
+  if (m_bShowTide) {
+    RebuildTideSelectList(GetVP().GetBBox());
+    DrawAllTidesInBBox(dc, GetVP().GetBBox());
+  }
+
+  if (m_bShowCurrent) {
+    RebuildCurrentSelectList(GetVP().GetBBox());
+    DrawAllCurrentsInBBox(dc, GetVP().GetBBox());
+  }
+
   if (!g_PrintingInProgress) {
     if (IsPrimaryCanvas()) {
       if (g_MainToolbar) g_MainToolbar->DrawDC(dc, 1.0);
@@ -12359,6 +12446,23 @@ void ChartCanvas::DrawOverlayObjects(ocpnDC &dc, const wxRegion &ru) {
     if (m_pAISRolloverWin) {
       m_pAISRolloverWin->Draw(dc);
       m_brepaint_piano = true;
+    }
+    if (m_brepaint_piano && g_bShowChartBar) {
+      m_Piano->Paint(GetClientSize().y - m_Piano->GetHeight(), dc);
+    }
+
+    if (m_Compass) m_Compass->Paint(dc);
+
+    if (!g_CanvasHideNotificationIcon) {
+      auto &noteman = NotificationManager::GetInstance();
+      if (noteman.GetNotificationCount()) {
+        m_notification_button->SetIconSeverity(noteman.GetMaxSeverity());
+        if (m_notification_button->UpdateStatus()) Refresh();
+        m_notification_button->Show(true);
+        m_notification_button->Paint(dc);
+      } else {
+        m_notification_button->Show(false);
+      }
     }
   }
   if (g_pi_manager) {
@@ -13676,15 +13780,20 @@ void ChartCanvas::UpdateGPSCompassStatusBox(bool b_force_new) {
 
   // check to see if it would overlap if it was in its home position (upper
   // right)
-  wxPoint tentative_pt(parent_size.x - rect.width - cc1_edge_comp,
-                       g_StyleManager->GetCurrentStyle()->GetCompassYOffset());
-  wxRect tentative_rect(tentative_pt, rect.GetSize());
+  wxPoint compass_pt(parent_size.x - rect.width - cc1_edge_comp,
+                     g_StyleManager->GetCurrentStyle()->GetCompassYOffset());
+  wxRect compass_rect(compass_pt, rect.GetSize());
 
-  m_Compass->Move(tentative_pt);
+  m_Compass->Move(compass_pt);
 
   if (m_Compass && m_Compass->IsShown())
     m_Compass->UpdateStatus(b_force_new | b_update);
 
+  wxPoint note_point =
+      wxPoint(compass_rect.x - compass_rect.width, compass_rect.y);
+  m_notification_button->Move(note_point);
+
+  m_notification_button->UpdateStatus();
   if (b_force_new | b_update) Refresh();
 }
 

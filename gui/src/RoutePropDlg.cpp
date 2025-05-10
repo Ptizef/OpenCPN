@@ -150,6 +150,10 @@ RoutePropDlg::RoutePropDlg(wxWindow* parent, wxWindowID id,
   m_tcDistance =
       new wxTextCtrl(m_pnlBasic, wxID_ANY, wxEmptyString, wxDefaultPosition,
                      wxDefaultSize, wxTE_READONLY);
+  m_tcDistance->SetToolTip(
+      _("Total route distance calculated using rhumb line (Mercator) distances "
+        "between waypoints. Rhumb lines maintain a constant bearing but may "
+        "not represent the shortest path between points."));
   m_tcDistance->SetMaxSize(wxSize(maxFieldSize, -1));
   m_tcDistance->SetMinSize(wxSize(maxFieldSize, -1));
 
@@ -168,6 +172,11 @@ RoutePropDlg::RoutePropDlg(wxWindow* parent, wxWindowID id,
   m_tcPlanSpeed =
       new wxTextCtrl(m_pnlBasic, wxID_ANY, wxEmptyString, wxDefaultPosition,
                      wxDefaultSize, wxTE_PROCESS_ENTER);
+  m_tcPlanSpeed->SetToolTip(
+      _("Default speed in knots used for route time calculations. This speed "
+        "is used for all legs unless individual waypoints have their own "
+        "planned speed values. Time calculations use both the planned speed "
+        "and the rhumb line distances between waypoints."));
   m_tcPlanSpeed->SetMaxSize(wxSize(maxFieldSize, -1));
   m_tcPlanSpeed->SetMinSize(wxSize(maxFieldSize, -1));
 
@@ -186,6 +195,12 @@ RoutePropDlg::RoutePropDlg(wxWindow* parent, wxWindowID id,
 
   m_tcEnroute = new wxTextCtrl(m_pnlBasic, wxID_ANY, wxEmptyString,
                                wxDefaultPosition, wxDefaultSize, wxTE_READONLY);
+  m_tcEnroute->SetToolTip(
+      _("Estimated total time to complete the route based on planned speeds "
+        "and rhumb line distances. For each leg, the calculation uses the "
+        "waypoint's planned speed if available, or the route's default speed "
+        "if not specified. The time is calculated as: distance ÷ speed for "
+        "each leg, then summed for the entire route."));
   m_tcEnroute->SetMaxSize(wxSize(maxFieldSize, -1));
   m_tcEnroute->SetMinSize(wxSize(maxFieldSize, -1));
 
@@ -238,14 +253,14 @@ RoutePropDlg::RoutePropDlg(wxWindow* parent, wxWindowID id,
   bSizerTime->Add(m_stTimeZone, 0, wxALL, 5);
 
   // Timezone for departure time and ETA display.
-  wxString m_choiceTimezoneChoices[] = {_("UTC"), _("Local@PC"),
-                                        _("LMT@Location")};
+  wxString m_choiceTimezoneChoices[] = {
+      _("UTC"), _("Local Time"), _("LMT@Location"), _("Honor Global Settings")};
   int m_choiceTimezoneNChoices =
       sizeof(m_choiceTimezoneChoices) / sizeof(wxString);
   m_choiceTimezone =
       new wxChoice(m_pnlBasic, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                    m_choiceTimezoneNChoices, m_choiceTimezoneChoices, 0);
-  m_choiceTimezone->SetSelection(0);
+  m_choiceTimezone->SetSelection(3 /*Honor Global Settings*/);
   m_choiceTimezone->SetMaxSize(wxSize(GetCharWidth() * 12, -1));
 
   bSizerTime->Add(m_choiceTimezone, 0, wxALL, 5);
@@ -540,6 +555,12 @@ RoutePropDlg::RoutePropDlg(wxWindow* parent, wxWindowID id,
 
   m_btnExtend = new wxButton(this, wxID_ANY, _("Extend"), wxDefaultPosition,
                              wxDefaultSize, 0);
+  m_btnExtend->SetToolTip(_(
+      "Extend this route by connecting it to another route. The button is "
+      "disabled when: the route is active, is part of a layer, or there is no "
+      "suitable route to connect to. A suitable route must be visible, "
+      "different from this route, and share a common waypoint with this route "
+      "(or have a waypoint very close to the last point of this route)."));
   wSizerCustomBtns->Add(m_btnExtend, 0, wxALIGN_CENTER_VERTICAL | wxALL, 5);
 
   m_btnSplit = new wxButton(this, wxID_ANY, _("Split"), wxDefaultPosition,

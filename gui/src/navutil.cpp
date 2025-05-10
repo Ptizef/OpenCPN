@@ -85,10 +85,10 @@
 #include "Layer.h"
 #include "navutil.h"
 #include "nmea0183.h"
-#include "NMEALogWindow.h"
 #include "observable_globvar.h"
 #include "ocpndc.h"
 #include "ocpn_frame.h"
+#include "ocpn_plugin.h"
 #include "OCPNPlatform.h"
 #include "OCPN_Sound.h"
 #include "s52plib.h"
@@ -155,6 +155,8 @@ extern bool g_bShowActiveRouteHighway;
 extern bool g_bShowRouteTotal;
 extern int g_nAWDefault;
 extern int g_nAWMax;
+extern bool g_btenhertz;
+extern bool g_declutter_anchorage;
 
 extern int g_nframewin_x;
 extern int g_nframewin_y;
@@ -225,6 +227,7 @@ extern int g_detailslider_dialog_x, g_detailslider_dialog_y;
 
 extern bool g_bUseGreenShip;
 
+extern int g_OwnShipmmsi;
 extern int g_OwnShipIconType;
 extern double g_n_ownship_length_meters;
 extern double g_n_ownship_beam_meters;
@@ -585,6 +588,7 @@ int MyConfig::LoadMyConfig() {
   g_n_arrival_circle_radius = 0.05;
   g_plus_minus_zoom_factor = 2.0;
   g_mouse_zoom_sensitivity = 1.5;
+  g_datetime_format = "UTC";
 
   g_AISShowTracks_Mins = 20;
   g_AISShowTracks_Limit = 300.0;
@@ -833,6 +837,8 @@ int MyConfig::LoadMyConfigRaw(bool bAsTemplate) {
   Read("CatalogCustomURL", &g_catalog_custom_url);
   Read("CatalogChannel", &g_catalog_channel);
 
+  Read("NetmaskBits", &g_netmask_bits);
+
   //  NMEA connection options.
   if (!bAsTemplate) {
     Read(_T ( "FilterNMEA_Avg" ), &g_bfilter_cogsog);
@@ -865,6 +871,8 @@ int MyConfig::LoadMyConfigRaw(bool bAsTemplate) {
   Read(_T ( "COGUPAvgSeconds" ), &g_COGAvgSec);
   Read(_T ( "LookAheadMode" ), &g_bLookAhead);
   Read(_T ( "SkewToNorthUp" ), &g_bskew_comp);
+  Read(_T ( "TenHzUpdate" ), &g_btenhertz, 0);
+  Read(_T ( "DeclutterAnchorage" ), &g_declutter_anchorage, 0);
 
   Read(_T( "NMEAAPBPrecision" ), &g_NMEAAPBPrecision);
 
@@ -987,6 +995,7 @@ int MyConfig::LoadMyConfigRaw(bool bAsTemplate) {
   Read(_T ( "OwnshipHDTPredictorWidth" ), &g_ownship_HDTpredictor_width);
   Read(_T ( "OwnshipHDTPredictorMiles" ), &g_ownship_HDTpredictor_miles);
 
+  Read(_T ( "OwnShipMMSINumber" ), &g_OwnShipmmsi);
   Read(_T ( "OwnShipIconType" ), &g_OwnShipIconType);
   Read(_T ( "OwnShipLength" ), &g_n_ownship_length_meters);
   Read(_T ( "OwnShipWidth" ), &g_n_ownship_beam_meters);
@@ -1011,6 +1020,8 @@ int MyConfig::LoadMyConfigRaw(bool bAsTemplate) {
   Read(_T ( "TrackRotateTimeType" ), &g_track_rotate_time_type);
   Read(_T ( "HighlightTracks" ), &g_bHighliteTracks);
 
+  Read(_T ( "DateTimeFormat" ), &g_datetime_format);
+
   wxString stps;
   Read(_T ( "PlanSpeed" ), &stps);
   if (!stps.IsEmpty()) stps.ToDouble(&g_PlanSpeed);
@@ -1029,12 +1040,6 @@ int MyConfig::LoadMyConfigRaw(bool bAsTemplate) {
 
   // We allow 0-99 backups ov navobj.xml
   Read(_T ( "KeepNavobjBackups" ), &g_navobjbackups);
-
-  NMEALogWindow::GetInstance().SetSize(Read(_T("NMEALogWindowSizeX"), 600L),
-                                       Read(_T("NMEALogWindowSizeY"), 400L));
-  NMEALogWindow::GetInstance().SetPos(Read(_T("NMEALogWindowPosX"), 10L),
-                                      Read(_T("NMEALogWindowPosY"), 10L));
-  NMEALogWindow::GetInstance().CheckPos(display_width, display_height);
 
   // Boolean to cater for legacy Input COM Port filer behaviour, i.e. show msg
   // filtered but put msg on bus.
@@ -1253,11 +1258,11 @@ int MyConfig::LoadMyConfigRaw(bool bAsTemplate) {
   if (!bAsTemplate) {
     SetPath(_T ( "/Settings/NMEADataSource" ));
 
+    TheConnectionParams().clear();
     wxString connectionconfigs;
     Read(_T( "DataConnections" ), &connectionconfigs);
     if (!connectionconfigs.IsEmpty()) {
       wxArrayString confs = wxStringTokenize(connectionconfigs, _T("|"));
-      TheConnectionParams().clear();
       for (size_t i = 0; i < confs.Count(); i++) {
         ConnectionParams *prm = new ConnectionParams(confs[i]);
         if (!prm->Valid) {
@@ -2415,6 +2420,7 @@ void MyConfig::UpdateSettings() {
   Write(_T( "CatalogCustomURL"), g_catalog_custom_url);
   Write(_T( "CatalogChannel"), g_catalog_channel);
 
+  Write("NetmaskBits", g_netmask_bits);
   Write(_T ( "FilterNMEA_Avg" ), g_bfilter_cogsog);
   Write(_T ( "FilterNMEA_Sec" ), g_COGFilterSec);
 
@@ -2463,6 +2469,8 @@ void MyConfig::UpdateSettings() {
 
   Write(_T ( "CourseUpMode" ), g_bCourseUp);
   if (!g_bInlandEcdis) Write(_T ( "LookAheadMode" ), g_bLookAhead);
+  Write(_T ( "TenHzUpdate" ), g_btenhertz);
+
   Write(_T ( "COGUPAvgSeconds" ), g_COGAvgSec);
   Write(_T ( "UseMagAPB" ), g_bMagneticAPB);
 
@@ -2475,6 +2483,7 @@ void MyConfig::UpdateSettings() {
   Write(_T ( "OwnshipHDTPredictorColor" ), g_ownship_HDTpredictor_color);
   Write(_T ( "OwnshipHDTPredictorEndmarker" ),
         g_ownship_HDTpredictor_endmarker);
+  Write(_T ( "OwnShipMMSINumber" ), g_OwnShipmmsi);
   Write(_T ( "OwnshipHDTPredictorWidth" ), g_ownship_HDTpredictor_width);
   Write(_T ( "OwnshipHDTPredictorMiles" ), g_ownship_HDTpredictor_miles);
 
@@ -2498,11 +2507,6 @@ void MyConfig::UpdateSettings() {
 
   Write(_T ( "ChartQuilting" ), g_bQuiltEnable);
 
-  Write(_T ( "NMEALogWindowSizeX" ), NMEALogWindow::GetInstance().GetSizeW());
-  Write(_T ( "NMEALogWindowSizeY" ), NMEALogWindow::GetInstance().GetSizeH());
-  Write(_T ( "NMEALogWindowPosX" ), NMEALogWindow::GetInstance().GetPosX());
-  Write(_T ( "NMEALogWindowPosY" ), NMEALogWindow::GetInstance().GetPosY());
-
   Write(_T ( "PreserveScaleOnX" ), g_bPreserveScaleOnX);
 
   Write(_T ( "StartWithTrackActive" ), g_bTrackCarryOver);
@@ -2511,6 +2515,7 @@ void MyConfig::UpdateSettings() {
   Write(_T ( "TrackRotateTimeType" ), g_track_rotate_time_type);
   Write(_T ( "HighlightTracks" ), g_bHighliteTracks);
 
+  Write(_T ( "DateTimeFormat" ), g_datetime_format);
   Write(_T ( "InitialStackIndex" ), g_restore_stackindex);
   Write(_T ( "InitialdBIndex" ), g_restore_dbindex);
 
@@ -3385,8 +3390,21 @@ wxDateTime toUsrDateTime(const wxDateTime ts, const int format,
   if (!ts.IsValid()) {
     return ts;
   }
+  int effective_format = format;
+  if (effective_format == GLOBAL_SETTINGS_INPUT) {
+    if (::g_datetime_format == "UTC") {
+      effective_format = UTCINPUT;
+    } else if (::g_datetime_format == "LMT") {
+      effective_format = LMTINPUT;
+    } else if (::g_datetime_format == "Local Time") {
+      effective_format = LTINPUT;
+    } else {
+      // Default to UTC
+      effective_format = UTCINPUT;
+    }
+  }
   wxDateTime dt;
-  switch (format) {
+  switch (effective_format) {
     case LMTINPUT:  // LMT@Location
       if (std::isnan(lon)) {
         dt = wxInvalidDateTime;
@@ -3412,8 +3430,21 @@ wxDateTime fromUsrDateTime(const wxDateTime ts, const int format,
   if (!ts.IsValid()) {
     return ts;
   }
+  int effective_format = format;
+  if (effective_format == GLOBAL_SETTINGS_INPUT) {
+    if (::g_datetime_format == "UTC") {
+      effective_format = UTCINPUT;
+    } else if (::g_datetime_format == "LMT") {
+      effective_format = LMTINPUT;
+    } else if (::g_datetime_format == "Local Time") {
+      effective_format = LTINPUT;
+    } else {
+      // Default to UTC
+      effective_format = UTCINPUT;
+    }
+  }
   wxDateTime dt;
-  switch (format) {
+  switch (effective_format) {
     case LMTINPUT:  // LMT@Location
       if (std::isnan(lon)) {
         dt = wxInvalidDateTime;
@@ -3611,16 +3642,6 @@ void AlphaBlending(ocpnDC &dc, int x, int y, int size_x, int size_y,
 
 #endif
   }
-}
-
-void GpxDocument::SeedRandom() {
-  /* Fill with random. Miliseconds hopefully good enough for our usage, reading
-   * /dev/random would be much better on linux and system guid function on
-   * Windows as well */
-  wxDateTime x = wxDateTime::UNow();
-  long seed = x.GetMillisecond();
-  seed *= x.GetTicks();
-  srand(seed);
 }
 
 void DimeControl(wxWindow *ctrl) {

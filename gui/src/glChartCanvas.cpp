@@ -180,6 +180,7 @@ extern "C" void glOrthof(float left, float right, float bottom, float top,
 #if defined(USE_ANDROID_GLES2) || defined(ocpnUSE_GLSL)
 #include "linmath.h"
 #include "shaders.h"
+#include "model/notification_manager.h"
 #endif
 
 extern bool GetMemoryStatus(int *mem_total, int *mem_used);
@@ -302,7 +303,6 @@ extern bool b_skipout;
 extern wxSize pprog_size;
 extern int pprog_count;
 extern int pprog_threads;
-extern MyFrame *gFrame;
 
 // #if defined(__MSVC__) && !defined(ocpnUSE_GLES) /* this compiler doesn't
 //  support vla */ const #endif extern int g_mipmap_max_level;
@@ -2277,8 +2277,6 @@ void glChartCanvas::ShipDraw(ocpnDC &dc) {
   float pCog = std::isnan(gCog) ? 0 : gCog;
   float pSog = std::isnan(gSog) ? 0 : gSog;
 
-  // In "b_follow" mode, we have a-priori information about the desired screen
-  // coordinates of ownship
   // Here, calculate the ownship location on screen, and make it so.
   // Special case:  No need for such precision on chart drag operations
   double shift_dx = 0;
@@ -2287,14 +2285,22 @@ void glChartCanvas::ShipDraw(ocpnDC &dc) {
     lGPSPoint.m_x = m_pParentCanvas->GetVP().pix_width / 2;
     lGPSPoint.m_y = m_pParentCanvas->GetVP().pix_height / 2;
     if (m_pParentCanvas->m_bLookAhead) {
-      double angle = m_pParentCanvas->dir_to_shift * PI / 180.;
-      angle += m_pParentCanvas->GetVPRotation();
-      shift_dx = m_pParentCanvas->meters_to_shift * sin(angle) *
-                 m_pParentCanvas->GetVPScale();
-      lGPSPoint.m_x -= shift_dx / cos(gLat * PI / 180.);
-      shift_dy = m_pParentCanvas->meters_to_shift * cos(angle) *
-                 m_pParentCanvas->GetVPScale();
-      lGPSPoint.m_y += shift_dy / cos(gLat * PI / 180.);
+      // In "b_follow" mode, we have a-priori information about the desired
+      // screen coordinates of ownship, as a pixel offset from center.
+      // Use this information as a performance optimization,
+      // at larger viewing scales.
+      if (m_pParentCanvas->GetVPChartScale() < 2e6) {
+        double angle = m_pParentCanvas->dir_to_shift * PI / 180.;
+        angle += m_pParentCanvas->GetVPRotation();
+        shift_dx = m_pParentCanvas->meters_to_shift * sin(angle) *
+                   m_pParentCanvas->GetVPScale();
+        lGPSPoint.m_x -= shift_dx / cos(gLat * PI / 180.);
+        shift_dy = m_pParentCanvas->meters_to_shift * cos(angle) *
+                   m_pParentCanvas->GetVPScale();
+        lGPSPoint.m_y += shift_dy / cos(gLat * PI / 180.);
+      } else {
+        m_pParentCanvas->GetDoubleCanvasPointPix(gLat, gLon, &lGPSPoint);
+      }
     } else {
       lGPSPoint.m_x -= m_pParentCanvas->m_OSoffsetx;
       lGPSPoint.m_y += m_pParentCanvas->m_OSoffsety;
@@ -3949,8 +3955,6 @@ void glChartCanvas::Render() {
       !g_GLOptions.m_bTextureCompressionCaching)
     g_glTextureManager->ClearJobList();
 
-  wxPaintDC(this);
-
   ocpnDC gldc(*this);
 
   int gl_width, gl_height;
@@ -4597,6 +4601,18 @@ void glChartCanvas::Render() {
       g_bShowCompassWin)
     m_pParentCanvas->m_Compass->Paint(gldc);
 
+  if (m_pParentCanvas->IsPrimaryCanvas()) {
+    auto &noteman = NotificationManager::GetInstance();
+    if (noteman.GetNotificationCount()) {
+      m_pParentCanvas->m_notification_button->SetIconSeverity(
+          noteman.GetMaxSeverity());
+      if (m_pParentCanvas->m_notification_button->UpdateStatus()) Refresh();
+      m_pParentCanvas->m_notification_button->Show(true);
+      m_pParentCanvas->m_notification_button->Paint(gldc);
+    } else {
+      m_pParentCanvas->m_notification_button->Show(false);
+    }
+  }
   RenderGLAlertMessage();
 #endif
 
@@ -4651,7 +4667,7 @@ void glChartCanvas::RenderS57TextOverlay(ViewPort &VPoint) {
         }
 
         // Grow the ViewPort a bit laterally, to minimize "jumping" of text
-        // elements at left side of screen
+        // elements at right side of screen
         ViewPort vpx = VPoint;
         vpx.BuildExpandedVP(VPoint.pix_width * 12 / 10, VPoint.pix_height);
 

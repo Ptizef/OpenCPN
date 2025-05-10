@@ -85,6 +85,7 @@ wxString GetShipNameFromFile(int);
 wxString AISTargetNameFileName;
 bool isBuoyMmsi(const int);
 extern Multiplexer *g_pMUX;
+int g_OwnShipmmsi;
 
 wxDEFINE_EVENT(EVT_N0183_VDO, ObservedEvt);
 wxDEFINE_EVENT(EVT_N0183_VDM, ObservedEvt);
@@ -424,7 +425,7 @@ bool AisDecoder::HandleN2K_129038(std::shared_ptr<const Nmea2000Msg> n2k_msg) {
                         NavStat, AISTransceiverInformation)) {
     int mmsi = UserID;
     // Stop here if the target shall be ignored
-    if (IsTargetOnTheIgnoreList(mmsi)) return false;
+    if (mmsi == g_OwnShipmmsi || IsTargetOnTheIgnoreList(mmsi)) return false;
 
     // Is this target already in the global target list?
     //  Search the current AISTargetList for an MMSI match
@@ -534,7 +535,7 @@ bool AisDecoder::HandleN2K_129039(std::shared_ptr<const Nmea2000Msg> n2k_msg) {
                         Band, Msg22, Mode, State)) {
     int mmsi = UserID;
     // Stop here if the target shall be ignored
-    if (IsTargetOnTheIgnoreList(mmsi)) return false;
+    if (mmsi == g_OwnShipmmsi || IsTargetOnTheIgnoreList(mmsi)) return false;
 
     // Is this target already in the global target list?
     //  Search the current AISTargetList for an MMSI match
@@ -563,7 +564,7 @@ bool AisDecoder::HandleN2K_129039(std::shared_ptr<const Nmea2000Msg> n2k_msg) {
     else
       pTargetData->Class = AIS_BUOY;
 
-    pTargetData->NavStatus = (ais_nav_status)NavStat;
+    pTargetData->NavStatus = UNDEFINED;  // Class B targets have no status.
     if (!N2kIsNA(SOG)) pTargetData->SOG = MS2KNOTS(SOG);
     if (!N2kIsNA(COG)) pTargetData->COG = GeodesicRadToDeg(COG);
     if (!N2kIsNA(Heading)) pTargetData->HDG = GeodesicRadToDeg(Heading);
@@ -622,7 +623,7 @@ bool AisDecoder::HandleN2K_129041(std::shared_ptr<const Nmea2000Msg> n2k_msg) {
   if (ParseN2kPGN129041(v, data)) {
     int mmsi = data.UserID;
     // Stop here if the target shall be ignored
-    if (IsTargetOnTheIgnoreList(mmsi)) return false;
+    if (mmsi == g_OwnShipmmsi || IsTargetOnTheIgnoreList(mmsi)) return false;
 
     // Is this target already in the global target list?
     //  Search the current AISTargetList for an MMSI match
@@ -718,7 +719,7 @@ bool AisDecoder::HandleN2K_129794(std::shared_ptr<const Nmea2000Msg> n2k_msg) {
                         GNSStype, DTE, AISinfo)) {
     int mmsi = UserID;
     // Stop here if the target shall be ignored
-    if (IsTargetOnTheIgnoreList(mmsi)) return false;
+    if (mmsi == g_OwnShipmmsi || IsTargetOnTheIgnoreList(mmsi)) return false;
 
     // Is this target already in the global target list?
     //  Search the current AISTargetList for an MMSI match
@@ -793,7 +794,7 @@ bool AisDecoder::HandleN2K_129809(std::shared_ptr<const Nmea2000Msg> n2k_msg) {
   if (ParseN2kPGN129809(v, MessageID, Repeat, UserID, Name)) {
     int mmsi = UserID;
     // Stop here if the target shall be ignored
-    if (IsTargetOnTheIgnoreList(mmsi)) return false;
+    if (mmsi == g_OwnShipmmsi || IsTargetOnTheIgnoreList(mmsi)) return false;
 
     // Is this target already in the global target list?
     //  Search the current AISTargetList for an MMSI match
@@ -849,7 +850,7 @@ bool AisDecoder::HandleN2K_129810(std::shared_ptr<const Nmea2000Msg> n2k_msg) {
                         MothershipID)) {
     int mmsi = UserID;
     // Stop here if the target shall be ignored
-    if (IsTargetOnTheIgnoreList(mmsi)) return false;
+    if (mmsi == g_OwnShipmmsi || IsTargetOnTheIgnoreList(mmsi)) return false;
 
     // Is this target already in the global target list?
     //  Search the current AISTargetList for an MMSI match
@@ -1092,12 +1093,14 @@ void AisDecoder::HandleSignalK(std::shared_ptr<const SignalkMsg> sK_msg) {
   if (g_pMUX && g_pMUX->IsLogActive()) {
     wxString logmsg;
     logmsg.Printf("AIS :MMSI: %ld", mmsi);
-    std::string source = sK_msg->source->to_string();
-    g_pMUX->LogInputMessage(logmsg, source, false, false);
+    g_pMUX->LogInputMessage(sK_msg, false, false);
   }
 
   // Stop here if the target shall be ignored
   if (IsTargetOnTheIgnoreList(mmsi)) return;
+  // If self data is not set on the SK server, own ship mmsi
+  // could fall through here but being set in options Own ship.
+  if (mmsi == g_OwnShipmmsi) return;
 
 #if 0
     wxString dbg;
@@ -2100,6 +2103,9 @@ AisError AisDecoder::DecodeN0183(const wxString &str) {
         }
       }
     }
+
+    // Check for own ship mmsi. It's not a valid AIS target.
+    if (mmsi == g_OwnShipmmsi) return AIS_GENERIC_ERROR;
 
     //  Search the current AISTargetList for an MMSI match
     auto it = AISTargetList.find(mmsi);
@@ -4285,6 +4291,13 @@ void AisDecoder::OnTimerAIS(wxTimerEvent &event) {
       }
     }
 
+    // Check if the target has recently been set as own MMSI
+    if (xtd->MMSI == g_OwnShipmmsi) {
+      remove_array.push_back(xtd->MMSI);  // Add this target to removal list
+      xtd->b_removed = true;
+      plugin_msg.Notify(xtd, "");
+    }
+
     ++it;
   }
 
@@ -4617,6 +4630,45 @@ wxString GetShipNameFromFile(int nmmsi) {
   return name;
 }
 
+void AisDecoder::UpdateMMSItoNameFile(const wxString &mmsi,
+                                      const wxString &name) {
+  // Path to the mmsitoname.csv file is already in AISTargetNameFileName
+
+  // Create a map to hold the current contents of the file
+  std::map<wxString, wxString> mmsi_name_map;
+
+  // Read the existing file
+  std::ifstream infile(AISTargetNameFileName.mb_str());
+  if (infile) {
+    std::string line;
+    while (getline(infile, line)) {
+      wxStringTokenizer tokenizer(wxString::FromUTF8(line.c_str()), _T(","));
+      wxString file_mmsi = tokenizer.GetNextToken();
+      wxString file_name = tokenizer.GetNextToken().Trim();
+      mmsi_name_map[file_mmsi] = file_name;
+    }
+    infile.close();
+  }
+
+  // Update or add the new entry.
+  mmsi_name_map[mmsi] = name.Upper();
+
+  // Write the updated map back to the file
+  std::ofstream outfile(AISTargetNameFileName.mb_str());
+  if (outfile) {
+    for (const auto &pair : mmsi_name_map) {
+      std::string line = std::string(pair.first.mb_str()) + "," +
+                         std::string(pair.second.mb_str()) + "\n";
+      outfile << line;
+    }
+    outfile.close();
+  }
+}
+
+wxString AisDecoder::GetMMSItoNameEntry(const wxString &mmsi) {
+  return GetShipNameFromFile(wxAtoi(mmsi));
+}
+
 // Assign a unique meteo mmsi related to position
 int AisMeteoNewMmsi(int orig_mmsi, int m_lat, int m_lon, int lon_bits = 0,
                     int siteID = 0) {
@@ -4706,7 +4758,8 @@ bool isBuoyMmsi(const int msi) {
   // Consider any not valid MMSI number for a class B target (message 18 or 19)
   // to be a "net buoy"
   int mid = msi / 1000000;
-  if ((mid > 200 && mid < 800) || mid >= 970) {
+  if ((mid > 200 && mid < 880) || mid >= 970) {
+    // MID is stated to be >200 <800. Handheld AIS starts with 8+mid thus 880
     return false;
   } else {
     return true;

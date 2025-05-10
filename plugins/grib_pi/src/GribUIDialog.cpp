@@ -37,6 +37,7 @@
 #include <math.h>
 #include <time.h>
 
+#include "ocpn_plugin.h"
 #include "pi_gl.h"
 #include "grib_pi.h"
 #include "GribTable.h"
@@ -53,7 +54,30 @@
 double m_cursor_lat, m_cursor_lon;
 int m_Altitude;
 int m_DialogStyle;
+/**
+ * Persisted version of the GRIB area selection mode.
+ *
+ * This value is saved to and loaded from the OpenCPN config file, allowing the
+ * user's preferred selection mode to persist between sessions. The value is
+ * used to:
+ * - Restore the last used selection mode on startup.
+ * - Keep track of the mode when dialog is closed/reopened.
+ * - Revert to previous mode if changes are cancelled.
+ */
 int m_SavedZoneSelMode;
+/**
+ * Tracks the current state of GRIB area selection for zone coordinates.
+ *
+ * This state controls:
+ * - Whether coordinates come from viewport or mouse area selection.
+ * - When to display the selection overlay during drawing.
+ * - When to update the lat/lon input fields.
+ *
+ * A typical mouse area selection flow:
+ * 1. START_SELECTION when manual mode chosen.
+ * 2. DRAW_SELECTION when user starts Shift+drag.
+ * 3. COMPLETE_SELECTION when user releases mouse button.
+ */
 int m_ZoneSelMode;
 
 extern grib_pi *g_pi;
@@ -94,22 +118,6 @@ static int CompareFileStringTime(const wxString &first,
 
   //      return ::wxFileModificationTime(first) -
   //      ::wxFileModificationTime(second);
-}
-
-// date/time in the desired time zone format
-static wxString TToString(const wxDateTime date_time, const int time_zone) {
-  wxDateTime t(date_time);
-  switch (time_zone) {
-    case 0:
-      if ((wxDateTime::Now() == (wxDateTime::Now().ToGMT())) &&
-          t.IsDST())  // bug in wxWingets 3.0 for UTC meridien ?
-        t.Add(wxTimeSpan(1, 0, 0, 0));
-      return t.Format(_T(" %a %d-%b-%Y  %H:%M "), wxDateTime::Local) +
-             _T("LOC");
-    case 1:
-    default:
-      return t.Format(_T(" %a %d-%b-%Y %H:%M  "), wxDateTime::UTC) + _T("UTC");
-  }
 }
 
 wxWindow *GetGRIBCanvas() {
@@ -160,13 +168,14 @@ void GribTimelineRecordSet::ClearCachedData() {
 
 GRIBUICtrlBar::GRIBUICtrlBar(wxWindow *parent, wxWindowID id,
                              const wxString &title, const wxPoint &pos,
-                             const wxSize &size, long style, grib_pi *ppi)
-    : GRIBUICtrlBarBase(parent, id, title, pos, size, style) {
+                             const wxSize &size, long style, grib_pi *ppi,
+                             double scale_factor)
+    : GRIBUICtrlBarBase(parent, id, title, pos, size, style, scale_factor) {
   pParent = parent;
   pPlugIn = ppi;
   // Preinitialize the vierwport with an existing value, see
   // https://github.com/OpenCPN/OpenCPN/pull/4002/files
-  m_vp = new PlugIn_ViewPort(pPlugIn->GetCurrentViewPort());
+  m_vpMouse = new PlugIn_ViewPort(pPlugIn->GetCurrentViewPort());
   pReq_Dialog = nullptr;
   m_bGRIBActiveFile = nullptr;
   m_pTimelineSet = nullptr;
@@ -182,6 +191,19 @@ GRIBUICtrlBar::GRIBUICtrlBar(wxWindow *parent, wxWindowID id,
   this->SetSizer(m_fgCtrlBarSizer);
   this->Layout();
   m_fgCtrlBarSizer->Fit(this);
+
+  // Initialize the time format check timer
+  m_tFormatRefresh.Connect(
+      wxEVT_TIMER, wxTimerEventHandler(GRIBUICtrlBar::OnFormatRefreshTimer),
+      nullptr, this);
+
+  // Sample the current time format using a fixed reference date (January 1,
+  // 2021 at noon)
+  wxDateTime referenceDate(1, wxDateTime::Jan, 2021, 12, 0, 0);
+  m_sLastTimeFormat = toUsrDateTimeFormat_Plugin(referenceDate);
+
+  // Start timer to check for time format changes (every 5 seconds)
+  m_tFormatRefresh.Start(5000);
 
   if (pConf) {
     pConf->SetPath(_T ( "/Settings/GRIB" ));
@@ -276,6 +298,11 @@ GRIBUICtrlBar::GRIBUICtrlBar(wxWindow *parent, wxWindowID id,
   m_highlight_lonmax = 0;
   m_highlight_latmin = 0;
   m_highlight_lonmin = 0;
+  // Create the dialog for downloading GRIB files.
+  // This dialog is created here, but not shown until the user requests it.
+  // This is done such that user can draw bounding box on the chart before
+  // the dialog is shown.
+  createRequestDialog();
 }
 
 GRIBUICtrlBar::~GRIBUICtrlBar() {
@@ -345,36 +372,8 @@ GRIBUICtrlBar::~GRIBUICtrlBar() {
     pConf->Write(_T( "WaveHeight" ), xyGribConfig.waveHeight);
     pConf->Write(_T( "WindWaves" ), xyGribConfig.windWaves);
   }
-  delete m_vp;
+  delete m_vpMouse;
   delete m_pTimelineSet;
-}
-
-wxBitmap GRIBUICtrlBar::GetScaledBitmap(wxBitmap bitmap,
-                                        const wxString svgFileName,
-                                        double scale_factor) {
-  int margin = 4;  // there is a small margin around the bitmap drawn by the
-                   // wxBitmapButton
-  int w = bitmap.GetWidth() - margin;
-  int h = bitmap.GetHeight() - margin;
-  w *= scale_factor;
-  h *= scale_factor;
-
-#ifdef ocpnUSE_SVG
-  wxString shareLocn = *GetpSharedDataLocation() + _T("plugins") +
-                       wxFileName::GetPathSeparator() + _T("grib_pi") +
-                       wxFileName::GetPathSeparator() + _T("data") +
-                       wxFileName::GetPathSeparator();
-  wxString filename = shareLocn + svgFileName + _T(".svg");
-
-  wxBitmap svgbm = GetBitmapFromSVGFile(filename, w, h);
-  if (svgbm.GetWidth() > 0 && svgbm.GetHeight() > 0)
-    return svgbm;
-  else
-#endif  // ocpnUSE_SVG
-  {
-    wxImage a = bitmap.ConvertToImage();
-    return wxBitmap(a.Scale(w, h), wxIMAGE_QUALITY_HIGH);
-  }
 }
 
 void GRIBUICtrlBar::SetScaledBitmap(double factor) {
@@ -402,7 +401,7 @@ void GRIBUICtrlBar::SetScaledBitmap(double factor) {
   m_bpSettings->SetBitmapLabel(
       GetScaledBitmap(wxBitmap(setting), _T("setting"), m_ScaledFactor));
 
-  SetRequestBitmap(m_ZoneSelMode);
+  SetRequestButtonBitmap(m_ZoneSelMode);
 
   // Careful here, this MinSize() sets the final width of the control bar,
   // overriding the width of the wxChoice above it.
@@ -415,29 +414,11 @@ void GRIBUICtrlBar::SetScaledBitmap(double factor) {
 #endif
 }
 
-void GRIBUICtrlBar::SetRequestBitmap(int type) {
+void GRIBUICtrlBar::SetRequestButtonBitmap(int type) {
   if (nullptr == m_bpRequest) return;
-
-  switch (type) {
-    case AUTO_SELECTION:
-    case SAVED_SELECTION:
-    case START_SELECTION:
-      m_bpRequest->SetBitmapLabel(
-          GetScaledBitmap(wxBitmap(request), _T("request"), m_ScaledFactor));
-      m_bpRequest->SetToolTip(_("Start a request"));
-      break;
-    case DRAW_SELECTION:
-      m_bpRequest->SetBitmapLabel(
-          GetScaledBitmap(wxBitmap(selzone), _T("selzone"), m_ScaledFactor));
-      m_bpRequest->SetToolTip(
-          _("Draw requested Area\nor Click here to stop request"));
-      break;
-    case COMPLETE_SELECTION:
-      m_bpRequest->SetBitmapLabel(GetScaledBitmap(
-          wxBitmap(request_end), _T("request_end"), m_ScaledFactor));
-      m_bpRequest->SetToolTip(_("Valid Area and Continue"));
-      break;
-  }
+  m_bpRequest->SetBitmapLabel(
+      GetScaledBitmap(wxBitmap(request), _T("request"), m_ScaledFactor));
+  m_bpRequest->SetToolTip(_("Start a download request"));
 }
 
 void GRIBUICtrlBar::OpenFile(bool newestFile) {
@@ -484,10 +465,10 @@ void GRIBUICtrlBar::OpenFile(bool newestFile) {
       title.Prepend(_("Error! ")).Append(_(" contains no valid data!"));
     } else {
       PopulateComboDataList();
-      title.append(_T(" (") +
-                   TToString(m_bGRIBActiveFile->GetRefDateTime(),
-                             pPlugIn->GetTimeZone()) +
-                   _T(" )"));
+      title.append(" (" +
+                   toUsrDateTimeFormat_Plugin(
+                       wxDateTime(m_bGRIBActiveFile->GetRefDateTime())) +
+                   ")");
 
       if (rsa->GetCount() > 1) {
         GribRecordSet &first = rsa->Item(0), &second = rsa->Item(1),
@@ -679,8 +660,8 @@ void GRIBUICtrlBar::SetCursorLatLon(double lat, double lon) {
   m_cursor_lon = lon;
   m_cursor_lat = lat;
 
-  if (m_vp && ((lat > m_vp->lat_min) && (lat < m_vp->lat_max)) &&
-      ((lon > m_vp->lon_min) && (lon < m_vp->lon_max)))
+  if (m_vpMouse && ((lat > m_vpMouse->lat_min) && (lat < m_vpMouse->lat_max)) &&
+      ((lon > m_vpMouse->lon_min) && (lon < m_vpMouse->lon_max)))
     UpdateTrackingControl();
 }
 
@@ -934,7 +915,7 @@ void GRIBUICtrlBar::OnMenuEvent(wxMenuEvent &event) {
       OnSettings(evt);
       break;
     case ID_BTNREQUEST:
-      OnRequest(evt);
+      OnRequestForecastData(evt);
   }
   if (alt != m_Altitude) {
     SetDialogsStyleSizePosition(true);
@@ -947,14 +928,16 @@ void GRIBUICtrlBar::MenuAppend(wxMenu *menu, int id, wxString label,
                                wxMenu *submenu) {
   wxMenuItem *item = new wxMenuItem(menu, id, label, _T(""), kind);
   // add a submenu to this item if necessary
-  if (submenu) item->SetSubMenu(submenu);
+  if (submenu) {
+    item->SetSubMenu(submenu);
+  }
 
-    /* Menu font do not work properly for MSW (wxWidgets 3.2.1)
-    #ifdef __WXMSW__
-      wxFont *qFont = OCPNGetFont(_("Menu"), 0);
-      item->SetFont(*qFont);
-    #endif
-    */
+  /* Menu font do not work properly for MSW (wxWidgets 3.2.1)
+  #ifdef __WXMSW__
+    wxFont *qFont = OCPNGetFont(_("Menu"), 0);
+    item->SetFont(*qFont);
+  #endif
+  */
 
 #if defined(__WXMSW__) || defined(__WXGTK__)
   if (!bitmap.IsSameAs(wxNullBitmap)) item->SetBitmap(bitmap);
@@ -1027,7 +1010,7 @@ void GRIBUICtrlBar::OnMouseEvent(wxMouseEvent &event) {
                          m_ZoneSelMode == START_SELECTION;
     bool requeststate3 = m_ZoneSelMode == DRAW_SELECTION;
     MenuAppend(xmenu, ID_BTNREQUEST,
-               requeststate1 ? _("Start a request")
+               requeststate1 ? _("Request forecast data")
                : requeststate3
                    ? _("Draw requested Area or Click here to stop request")
                    : _("Valid Area and Continue"),
@@ -1068,9 +1051,8 @@ void GRIBUICtrlBar::ContextMenuItemCallback(int id) {
   ArrayOfGribRecordSets *rsa = m_bGRIBActiveFile->GetRecordSetArrayPtr();
   GRIBTable *table = new GRIBTable(*this);
 
-  table->InitGribTable(pPlugIn->GetTimeZone(), rsa,
-                       GetNearestIndex(GetNow(), 0));
-  table->SetTableSizePosition(m_vp->pix_width, m_vp->pix_height);
+  table->InitGribTable(rsa, GetNearestIndex(GetNow(), 0));
+  table->SetTableSizePosition(m_vpMouse->pix_width, m_vpMouse->pix_height);
 
   table->ShowModal();
 
@@ -1079,13 +1061,17 @@ void GRIBUICtrlBar::ContextMenuItemCallback(int id) {
   delete table;
 }
 
-void GRIBUICtrlBar::SetViewPort(PlugIn_ViewPort *vp) {
-  if (m_vp == vp) return;
+void GRIBUICtrlBar::SetViewPortUnderMouse(PlugIn_ViewPort *vp) {
+  if (m_vpMouse == vp) return;
 
-  delete m_vp;
-  m_vp = new PlugIn_ViewPort(*vp);
+  delete m_vpMouse;
+  m_vpMouse = new PlugIn_ViewPort(*vp);
 
-  if (pReq_Dialog) pReq_Dialog->OnVpChange(vp);
+  if (pReq_Dialog) pReq_Dialog->OnVpUnderMouseChange(vp);
+}
+
+void GRIBUICtrlBar::SetViewPortWithFocus(PlugIn_ViewPort *vp) {
+  if (pReq_Dialog) pReq_Dialog->OnVpWithFocusChange(vp);
 }
 
 void GRIBUICtrlBar::OnClose(wxCloseEvent &event) {
@@ -1095,7 +1081,7 @@ void GRIBUICtrlBar::OnClose(wxCloseEvent &event) {
     if (m_ZoneSelMode > START_SELECTION) {
       pReq_Dialog->StopGraphicalZoneSelection();
       m_ZoneSelMode = START_SELECTION;
-      // SetRequestBitmap( m_ZoneSelMode );
+      // SetRequestButtonBitmap( m_ZoneSelMode );
     }
   pPlugIn->SendTimelineMessage(wxInvalidDateTime);
 
@@ -1122,52 +1108,35 @@ void GRIBUICtrlBar::OnPaint(wxPaintEvent &event) {
   }
 }
 
-void GRIBUICtrlBar::OnRequest(wxCommandEvent &event) {
+void GRIBUICtrlBar::createRequestDialog() {
+  ::wxBeginBusyCursor();
+
+  delete pReq_Dialog;  // delete to be re-created
+
+  pReq_Dialog = new GribRequestSetting(*this);
+  pPlugIn->SetDialogFont(pReq_Dialog);
+  pPlugIn->SetDialogFont(pReq_Dialog->m_sScrolledDialog);
+  pReq_Dialog->OnVpUnderMouseChange(m_vpMouse);
+  pReq_Dialog->SetRequestDialogSize();
+  if (::wxIsBusy()) ::wxEndBusyCursor();
+}
+
+void GRIBUICtrlBar::OnRequestForecastData(wxCommandEvent &event) {
   if (m_tPlayStop.IsRunning())
     return;  // do nothing when play back is running !
 
   /*if there is one instance of the dialog already visible, do nothing*/
   if (pReq_Dialog && pReq_Dialog->IsShown()) return;
 
-  /*a second click without selection cancel the process*/
-  if (m_ZoneSelMode == DRAW_SELECTION) {
-    assert(pReq_Dialog);
-    m_ZoneSelMode = START_SELECTION;
-    pReq_Dialog->StopGraphicalZoneSelection();
-    SetRequestBitmap(m_ZoneSelMode);
-    return;
-  }
-
   /*create new request dialog*/
-  if (m_ZoneSelMode == AUTO_SELECTION || m_ZoneSelMode == SAVED_SELECTION ||
-      m_ZoneSelMode == START_SELECTION) {
-    ::wxBeginBusyCursor();
+  createRequestDialog();
+  // need to set a position at start
+  int w;
+  ::wxDisplaySize(&w, nullptr);
+  pReq_Dialog->Move((w - pReq_Dialog->GetSize().GetX()) / 2, 30);
+  pReq_Dialog->Show();
 
-    delete pReq_Dialog;  // delete to be re-created
-
-    pReq_Dialog = new GribRequestSetting(*this);
-    pPlugIn->SetDialogFont(pReq_Dialog);
-    pPlugIn->SetDialogFont(pReq_Dialog->m_sScrolledDialog);
-    pReq_Dialog->OnVpChange(m_vp);
-    pReq_Dialog->SetRequestDialogSize();
-    // need to set a position at start
-    int w;
-    ::wxDisplaySize(&w, nullptr);
-    pReq_Dialog->Move((w - pReq_Dialog->GetSize().GetX()) / 2, 30);
-
-  }  // end create new request dialog
-
-  pReq_Dialog->Show(m_ZoneSelMode == AUTO_SELECTION ||
-                    m_ZoneSelMode == SAVED_SELECTION ||
-                    m_ZoneSelMode == COMPLETE_SELECTION);
-  m_ZoneSelMode = m_ZoneSelMode == START_SELECTION      ? DRAW_SELECTION
-                  : m_ZoneSelMode == COMPLETE_SELECTION ? START_SELECTION
-                                                        : m_ZoneSelMode;
-  if (m_ZoneSelMode == START_SELECTION)
-    pReq_Dialog->StopGraphicalZoneSelection();
-  SetRequestBitmap(m_ZoneSelMode);  // set appopriate bitmap
-
-  if (::wxIsBusy()) ::wxEndBusyCursor();
+  SetRequestButtonBitmap(m_ZoneSelMode);  // set appopriate bitmap
 }
 
 void GRIBUICtrlBar::OnSettings(wxCommandEvent &event) {
@@ -1378,12 +1347,12 @@ void GRIBUICtrlBar::TimelineChanged() {
   } else {
     m_cRecordForecast->SetSelection(GetNearestIndex(time, 2));
     SaveSelectionString();  // memorize index and label
-    m_cRecordForecast->SetString(
-        m_Selection_index,
-        TToString(time, pPlugIn->GetTimeZone()));  // replace it by the
-                                                   // interpolated time label
-    m_cRecordForecast->SetStringSelection(TToString(
-        time, pPlugIn->GetTimeZone()));  // ensure it's visible in the box
+    wxString formattedTime = toUsrDateTimeFormat_Plugin(time);
+    m_cRecordForecast->SetString(m_Selection_index,
+                                 formattedTime);  // replace it by the
+                                                  // interpolated time label
+    m_cRecordForecast->SetStringSelection(
+        formattedTime);  // ensure it's visible in the box
   }
 
   UpdateTrackingControl();
@@ -1440,7 +1409,7 @@ wxDateTime GRIBUICtrlBar::GetNow() {
 
   ArrayOfGribRecordSets *rsa = m_bGRIBActiveFile->GetRecordSetArrayPtr();
 
-  // verifie if we are outside of the file time range
+  // Verify if we are outside of the file time range
   now = (now > rsa->Item(rsa->GetCount() - 1).m_Reference_Time)
             ? rsa->Item(rsa->GetCount() - 1).m_Reference_Time
         : (now < rsa->Item(0).m_Reference_Time) ? rsa->Item(0).m_Reference_Time
@@ -1559,7 +1528,7 @@ GribTimelineRecordSet *GRIBUICtrlBar::GetTimeLineRecordSet(wxDateTime time) {
   return set;
 }
 
-void GRIBUICtrlBar::GetProjectedLatLon(int &x, int &y) {
+void GRIBUICtrlBar::GetProjectedLatLon(int &x, int &y, PlugIn_ViewPort *vp) {
   wxPoint p(0, 0);
   auto now = TimelineTime();
   auto sog = m_ProjectBoatPanel->GetSpeed();
@@ -1569,8 +1538,8 @@ void GRIBUICtrlBar::GetProjectedLatLon(int &x, int &y) {
   PositionBearingDistanceMercator_Plugin(pPlugIn->m_boat_lat,
                                          pPlugIn->m_boat_lon, cog, dist,
                                          &m_projected_lat, &m_projected_lon);
-  if (m_vp) {
-    GetCanvasPixLL(m_vp, &p, m_projected_lat, m_projected_lon);
+  if (vp) {
+    GetCanvasPixLL(vp, &p, m_projected_lat, m_projected_lon);
   }
   x = p.x;
   y = p.y;
@@ -1762,8 +1731,7 @@ void GRIBUICtrlBar::PopulateComboDataList() {
   ArrayOfGribRecordSets *rsa = m_bGRIBActiveFile->GetRecordSetArrayPtr();
   for (size_t i = 0; i < rsa->GetCount(); i++) {
     wxDateTime t(rsa->Item(i).m_Reference_Time);
-
-    m_cRecordForecast->Append(TToString(t, pPlugIn->GetTimeZone()));
+    m_cRecordForecast->Append(toUsrDateTimeFormat_Plugin(t));
   }
   m_cRecordForecast->SetSelection(index);
 }
@@ -1947,13 +1915,11 @@ void GRIBUICtrlBar::ComputeBestForecastForNow() {
                               // wxChoice date time label
   m_cRecordForecast->SetSelection(GetNearestIndex(now, 2));
   SaveSelectionString();  // memorize the new selected wxChoice date time label
-  m_cRecordForecast->SetString(
-      m_Selection_index,
-      TToString(now,
-                pPlugIn->GetTimeZone()));  // write the now date time label
-                                           // in the right place in wxChoice
-  m_cRecordForecast->SetStringSelection(
-      TToString(now, pPlugIn->GetTimeZone()));  // put it in the box
+  wxString nowTime = toUsrDateTimeFormat_Plugin(now);
+  m_cRecordForecast->SetString(m_Selection_index,
+                               nowTime);  // write the now date time label
+                                          // in the right place in wxChoice
+  m_cRecordForecast->SetStringSelection(nowTime);  // put it in the box
 
   UpdateTrackingControl();
 
@@ -2002,6 +1968,29 @@ void GRIBUICtrlBar::SetFactoryOptions() {
 
   UpdateTrackingControl();
   RequestRefresh(GetGRIBCanvas());
+}
+
+void GRIBUICtrlBar::OnFormatRefreshTimer(wxTimerEvent &event) {
+  // Check if time format has changed by comparing current format with saved
+  // format
+  wxDateTime referenceDate(1, wxDateTime::Jan, 2021, 12, 0, 0);
+  wxString currentFormat = toUsrDateTimeFormat_Plugin(referenceDate);
+
+  if (currentFormat != m_sLastTimeFormat) {
+    // Time format has changed, update all time displays
+    m_sLastTimeFormat = currentFormat;
+
+    if (m_bGRIBActiveFile && m_bGRIBActiveFile->IsOK()) {
+      // Refresh the time format in the dropdown list
+      PopulateComboDataList();
+
+      // Update the timeline display
+      TimelineChanged();
+
+      // Request a refresh to update any on-screen displays
+      RequestRefresh(GetGRIBCanvas());
+    }
+  }
 }
 
 //----------------------------------------------------------------------------------------------------------

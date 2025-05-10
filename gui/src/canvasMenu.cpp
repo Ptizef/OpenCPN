@@ -68,7 +68,6 @@
 #include "navutil.h"
 #include "ocpn_frame.h"
 #include "OCPNPlatform.h"
-#include "NMEALogWindow.h"
 #include "peer_client_dlg.h"
 #include "pluginmanager.h"
 #include "Quilt.h"
@@ -89,6 +88,7 @@
 #include "track_gui.h"
 #include "TrackPropDlg.h"
 #include "undo.h"
+#include "model/navobj_db.h"
 
 #ifdef __ANDROID__
 #include "androidUTIL.h"
@@ -233,9 +233,8 @@ CanvasMenuHandler::CanvasMenuHandler(ChartCanvas *parentCanvas,
                                      Route *selectedRoute, Track *selectedTrack,
                                      RoutePoint *selectedPoint,
                                      int selectedAIS_MMSI,
-                                     void *selectedTCIndex)
-
-{
+                                     void *selectedTCIndex, wxWindow *nmea_log)
+    : m_nmea_log(nmea_log) {
   parent = parentCanvas;
   m_pSelectedRoute = selectedRoute;
   m_pSelectedTrack = selectedTrack;
@@ -328,7 +327,7 @@ void CanvasMenuHandler::CanvasPopupMenu(int x, int y, int seltype) {
   wxMenu *subMenuRedo = new wxMenu("Redo...Ctrl-Y");
 #endif
   wxMenu *subMenuDebug = new wxMenu("");
-  MenuAppend1(subMenuDebug, ID_DGB_MENU_NMEA_WINDOW, "Show NMEA log window");
+  MenuAppend1(subMenuDebug, ID_DGB_MENU_NMEA_WINDOW, _("Show Data Monitor"));
 
   wxMenu *menuFocus = contextMenu;  // This is the one that will be shown
 
@@ -520,8 +519,9 @@ void CanvasMenuHandler::CanvasPopupMenu(int x, int y, int seltype) {
       MenuAppend1(contextMenu, ID_DEF_MENU_MOVE_BOAT_HERE, _("Move Boat Here"));
   }
 
-  if (!g_bBasicMenus &&
-      (!(g_pRouteMan->GetpActiveRoute() || (seltype & SELTYPE_MARKPOINT))))
+  if (!g_bBasicMenus && !g_pRouteMan->GetpActiveRoute() &&
+      (!(seltype & SELTYPE_MARKPOINT) ||
+       (m_pFoundRoutePoint && m_pFoundRoutePoint->m_bIsInLayer)))
     MenuAppend1(contextMenu, ID_DEF_MENU_GOTO_HERE, _("Navigate To Here"));
 
   if (!g_bBasicMenus)
@@ -1330,6 +1330,7 @@ void CanvasMenuHandler::PopupMenuHandler(wxCommandEvent &event) {
             g_pRouteMan->GetRouteArrayContaining(m_pFoundRoutePoint);
         if (proute_array) {
           pWayPointMan->DestroyWaypoint(m_pFoundRoutePoint);
+          delete proute_array;
         } else {
           parent->undo->BeforeUndoableAction(
               Undo_DeleteWaypoint, m_pFoundRoutePoint, Undo_IsOrphanded,
@@ -1501,13 +1502,10 @@ void CanvasMenuHandler::PopupMenuHandler(wxCommandEvent &event) {
       break;
     }
 
-    case ID_DGB_MENU_NMEA_WINDOW: {
-      if (!wxWindow::FindWindowByName("NmeaDebugWindow")) {
-        auto top_window = wxWindow::FindWindowByName(kTopLevelWindowName);
-        NMEALogWindow::GetInstance().Create(top_window, 35);
-      }
-      wxWindow::FindWindowByName("NmeaDebugWindow")->Show();
-    } break;
+    case ID_DGB_MENU_NMEA_WINDOW:
+      m_nmea_log->Show();
+      m_nmea_log->Raise();
+      break;
 
     case ID_RT_MENU_REVERSE: {
       if (m_pSelectedRoute->m_bIsInLayer) break;
@@ -1916,8 +1914,8 @@ void CanvasMenuHandler::PopupMenuHandler(wxCommandEvent &event) {
         if (m_pSelectedTrack == g_pActiveTrack)
           m_pSelectedTrack = parent->parent_frame->TrackOff();
         g_pAIS->DeletePersistentTrack(m_pSelectedTrack);
-        pConfig->DeleteConfigTrack(m_pSelectedTrack);
-
+        // pConfig->DeleteConfigTrack(m_pSelectedTrack);
+        NavObj_dB::GetInstance().DeleteTrack(m_pSelectedTrack);
         RoutemanGui(*g_pRouteMan).DeleteTrack(m_pSelectedTrack);
 
         if (TrackPropDlg::getInstanceFlag() && pTrackPropDialog &&

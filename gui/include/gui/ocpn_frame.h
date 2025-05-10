@@ -40,10 +40,10 @@
 #include "comm_overflow_dlg.h"
 #include "connections_dlg.h"
 #include "color_handler.h"
+#include "data_monitor.h"
 #include "gui_lib.h"
 #include "load_errors_dlg.h"
 #include "observable_evtvar.h"
-#include "ocpn_print.h"
 #include "s52s57.h"
 #include "s57registrar_mgr.h"
 #include "SencManager.h"
@@ -260,6 +260,8 @@ public:
 
   double GetBestVPScale(ChartBase* pchart);
 
+  DataMonitor* GetDataMonitor() const { return m_data_monitor; }
+
   ColorScheme GetColorScheme();
   void SetAndApplyColorScheme(ColorScheme cs);
 
@@ -376,6 +378,7 @@ private:
   wxDateTime m_MMEAeventTime;
   unsigned long m_ulLastNMEATicktime;
   int m_tick_idx;
+  wxDateTime m_fix_start_time;
 
   wxString m_last_reported_chart_name;
   wxString m_last_reported_chart_pubdate;
@@ -391,6 +394,7 @@ private:
   int m_ChartUpdatePeriod;
   bool m_last_bGPSValid;
   bool m_last_bVelocityValid;
+  double m_last_hdt;
 
   wxString prev_locale;
 
@@ -424,6 +428,7 @@ private:
   wxArrayString pathArray;
   double restoreScale[4];
   unsigned int last_canvasConfig;
+  DataMonitor* m_data_monitor;
 
   DECLARE_EVENT_TABLE()
 };

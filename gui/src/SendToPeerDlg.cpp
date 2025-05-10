@@ -53,7 +53,6 @@
 #define TIMER_AUTOSCAN 94522
 #define TIMER_SCANTICK 94523
 
-extern MyFrame* gFrame;
 extern OCPNPlatform* g_Platform;
 
 static PeerDlgResult ConfirmWriteDlg() {
@@ -124,8 +123,9 @@ static PeerDlgResult RunStatusDlg(PeerDlg kind, int status) {
 }
 
 std::pair<PeerDlgResult, std::string> RunPincodeDlg() {
-  PinConfirmDlg dlg(gFrame, wxID_ANY, _("OpenCPN Server Message"), "",
-                    wxDefaultPosition, wxDefaultSize, SYMBOL_PCD_STYLE);
+  PinConfirmDlg dlg(wxTheApp->GetTopWindow(), wxID_ANY,
+                    _("OpenCPN Server Message"), "", wxDefaultPosition,
+                    wxDefaultSize, SYMBOL_PCD_STYLE);
 
   static const char* const msg =
       _("A server pin is needed.\n"
@@ -193,7 +193,7 @@ bool SendToPeerDlg::Create(wxWindow* parent, wxWindowID id,
                            const wxString& caption, const wxString& hint,
                            const wxPoint& pos, const wxSize& size, long style) {
   SetExtraStyle(GetExtraStyle() | wxWS_EX_BLOCK_EVENTS);
-  wxFont* pF = OCPNGetFont(_("Dialog"), 0);
+  wxFont* pF = OCPNGetFont(_("Dialog"));
   SetFont(*pF);
 
   wxDialog::Create(parent, id, caption, pos, size, style);

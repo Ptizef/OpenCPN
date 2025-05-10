@@ -32,9 +32,11 @@
 
 #include "model/comm_appmsg.h"
 #include "model/comm_navmsg_bus.h"
-#include "model/plugin_loader.h"
-
+#include "model/gui.h"
+#include "model/nmea_log.h"
 #include "model/plugin_comm.h"
+#include "model/plugin_loader.h"
+#include "model/ocpn_utils.h"
 
 #include "ocpn_plugin.h"
 
@@ -55,6 +57,40 @@ static void catch_signals_PIM(int signo) {
 }
 
 #endif
+static std::string PosItem(const std::string what, double item) {
+  std::stringstream ss;
+  ss << " " << what << " " << std::setprecision(3) << item;
+  return ss.str();
+}
+
+static std::string MsgToString(PlugIn_Position_Fix fix) {
+  std::stringstream ss;
+  ss << Position(fix.Lat, fix.Lon).to_string() << " " << PosItem("Cog", fix.Cog)
+     << PosItem("Sog", fix.Sog) << " " << PosItem("Var", fix.Var)
+     << " Nsats: " << fix.nSats;
+  return ss.str();
+}
+
+static std::string JoinLines(const std::string lines) {
+  std::istringstream is(lines);
+  std::string line;
+  std::string output;
+  while (std::getline(is, line)) output += line + " ";
+  return output.substr(0, output.size() - 1);
+}
+
+static void LogMessage(const std::shared_ptr<const NavMsg>& message,
+                       const std::string prefix = "") {
+  auto w = wxWindow::FindWindowByName(kDataMonitorWindowName);
+  auto log = dynamic_cast<NmeaLog*>(w);
+  if (log) {
+    NavmsgStatus ns;
+    ns.direction = NavmsgStatus::Direction::kInternal;
+    Logline ll(message, ns);
+    ll.prefix = prefix;
+    log->Add(ll);
+  }
+}
 
 void SendMessageToAllPlugins(const wxString& message_id,
                              const wxString& message_body) {
@@ -62,26 +98,25 @@ void SendMessageToAllPlugins(const wxString& message_id,
       PluginMsg(message_id.ToStdString(), message_body.ToStdString()));
   NavMsgBus::GetInstance().Notify(msg);
 
-  // decouple 'const wxString &' and 'wxString &' to keep bin
-  wxString decouple_message_id(message_id);
-  wxString decouple_message_body(message_body);
+  // decouple 'const wxString &' and 'wxString &' to keep API
+  wxString id(message_id);
+  wxString body(message_body);
 
-  auto plugin_array = PluginLoader::getInstance()->GetPlugInArray();
-  for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
-    PlugInContainer* pic = plugin_array->Item(i);
+  LogMessage(msg);
+  // LogMessage(std::string("internal ALL ") + msg->to_string());  FIXME/leamas
+
+  for (auto pic : *PluginLoader::GetInstance()->GetPlugInArray()) {
     if (pic->m_enabled && pic->m_init_state) {
       if (pic->m_cap_flag & WANTS_PLUGIN_MESSAGING) {
         switch (pic->m_api_version) {
           case 106: {
             auto* ppi = dynamic_cast<opencpn_plugin_16*>(pic->m_pplugin);
-            if (ppi)
-              ppi->SetPluginMessage(decouple_message_id, decouple_message_body);
+            if (ppi) ppi->SetPluginMessage(id, body);
             break;
           }
           case 107: {
             auto* ppi = dynamic_cast<opencpn_plugin_17*>(pic->m_pplugin);
-            if (ppi)
-              ppi->SetPluginMessage(decouple_message_id, decouple_message_body);
+            if (ppi) ppi->SetPluginMessage(id, body);
             break;
           }
           case 108:
@@ -95,10 +130,10 @@ void SendMessageToAllPlugins(const wxString& message_id,
           case 116:
           case 117:
           case 118:
-          case 119: {
+          case 119:
+          case 120: {
             auto* ppi = dynamic_cast<opencpn_plugin_18*>(pic->m_pplugin);
-            if (ppi)
-              ppi->SetPluginMessage(decouple_message_id, decouple_message_body);
+            if (ppi) ppi->SetPluginMessage(id, body);
             break;
           }
           default:
@@ -110,18 +145,21 @@ void SendMessageToAllPlugins(const wxString& message_id,
 }
 
 void SendJSONMessageToAllPlugins(const wxString& message_id, wxJSONValue v) {
-  wxJSONWriter w;
+  wxJSONWriter w(wxJSONWRITER_NO_LINEFEEDS | wxJSONWRITER_STYLED);
   wxString out;
   w.Write(v, out);
+  auto msg =
+      std::make_shared<PluginMsg>(message_id.ToStdString(), out.ToStdString());
   SendMessageToAllPlugins(message_id, out);
   wxLogDebug(message_id);
   wxLogDebug(out);
+  LogMessage(msg, "Json message ");
 }
 
 void SendAISSentenceToAllPlugIns(const wxString& sentence) {
   // decouple 'const wxString &' to keep interface.
   wxString decouple_sentence(sentence);
-  auto plugin_array = PluginLoader::getInstance()->GetPlugInArray();
+  auto plugin_array = PluginLoader::GetInstance()->GetPlugInArray();
   for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
     PlugInContainer* pic = plugin_array->Item(i);
     if (pic->m_enabled && pic->m_init_state) {
@@ -129,6 +167,9 @@ void SendAISSentenceToAllPlugIns(const wxString& sentence) {
         pic->m_pplugin->SetAISSentence(decouple_sentence);
     }
   }
+  auto msg =
+      std::make_shared<PluginMsg>("AIS", JoinLines(sentence.ToStdString()));
+  LogMessage(msg, "AIS data ");
 }
 
 void SendPositionFixToAllPlugIns(GenericPosDatEx* ppos) {
@@ -142,7 +183,7 @@ void SendPositionFixToAllPlugIns(GenericPosDatEx* ppos) {
   pfix.FixTime = ppos->FixTime;
   pfix.nSats = ppos->nSats;
 
-  auto plugin_array = PluginLoader::getInstance()->GetPlugInArray();
+  auto plugin_array = PluginLoader::GetInstance()->GetPlugInArray();
   for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
     PlugInContainer* pic = plugin_array->Item(i);
     if (pic->m_enabled && pic->m_init_state) {
@@ -163,6 +204,9 @@ void SendPositionFixToAllPlugIns(GenericPosDatEx* ppos) {
   pfix_ex.Hdt = ppos->kHdt;
   pfix_ex.Hdm = ppos->kHdm;
 
+  auto msg = std::make_shared<PluginMsg>("position-fix", MsgToString(pfix));
+  LogMessage(msg, "application ALL gnss-fix ");
+
   for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
     PlugInContainer* pic = plugin_array->Item(i);
     if (pic->m_enabled && pic->m_init_state) {
@@ -179,7 +223,8 @@ void SendPositionFixToAllPlugIns(GenericPosDatEx* ppos) {
           case 116:
           case 117:
           case 118:
-          case 119: {
+          case 119:
+          case 120: {
             auto* ppi = dynamic_cast<opencpn_plugin_18*>(pic->m_pplugin);
             if (ppi) ppi->SetPositionFixEx(pfix_ex);
             break;
@@ -199,7 +244,7 @@ void SendActiveLegInfoToAllPlugIns(const ActiveLegDat* leg_info) {
   leg.wp_name = leg_info->wp_name;
   leg.Xte = leg_info->Xte;
   leg.arrival = leg_info->arrival;
-  auto plugin_array = PluginLoader::getInstance()->GetPlugInArray();
+  auto plugin_array = PluginLoader::GetInstance()->GetPlugInArray();
   for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
     PlugInContainer* pic = plugin_array->Item(i);
     if (pic->m_enabled && pic->m_init_state) {
@@ -217,7 +262,8 @@ void SendActiveLegInfoToAllPlugIns(const ActiveLegDat* leg_info) {
             break;
           case 117:
           case 118:
-          case 119: {
+          case 119:
+          case 120: {
             auto* ppi = dynamic_cast<opencpn_plugin_117*>(pic->m_pplugin);
             if (ppi) ppi->SetActiveLegInfo(leg);
             break;
@@ -232,7 +278,7 @@ void SendActiveLegInfoToAllPlugIns(const ActiveLegDat* leg_info) {
 
 bool SendMouseEventToPlugins(wxMouseEvent& event) {
   bool bret = false;
-  auto plugin_array = PluginLoader::getInstance()->GetPlugInArray();
+  auto plugin_array = PluginLoader::GetInstance()->GetPlugInArray();
   for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
     PlugInContainer* pic = plugin_array->Item(i);
     if (pic->m_enabled && pic->m_init_state) {
@@ -245,7 +291,8 @@ bool SendMouseEventToPlugins(wxMouseEvent& event) {
           case 116:
           case 117:
           case 118:
-          case 119: {
+          case 119:
+          case 120: {
             auto* ppi = dynamic_cast<opencpn_plugin_112*>(pic->m_pplugin);
             if (ppi && ppi->MouseEventHook(event)) bret = true;
             break;
@@ -261,7 +308,7 @@ bool SendMouseEventToPlugins(wxMouseEvent& event) {
 
 bool SendKeyEventToPlugins(wxKeyEvent& event) {
   bool bret = false;
-  auto plugin_array = PluginLoader::getInstance()->GetPlugInArray();
+  auto plugin_array = PluginLoader::GetInstance()->GetPlugInArray();
   for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
     PlugInContainer* pic = plugin_array->Item(i);
     if (pic->m_enabled && pic->m_init_state) {
@@ -274,7 +321,8 @@ bool SendKeyEventToPlugins(wxKeyEvent& event) {
             case 116:
             case 117:
             case 118:
-            case 119: {
+            case 119:
+            case 120: {
               auto* ppi = dynamic_cast<opencpn_plugin_113*>(pic->m_pplugin);
               if (ppi && ppi->KeyboardEventHook(event)) bret = true;
               break;
@@ -291,13 +339,14 @@ bool SendKeyEventToPlugins(wxKeyEvent& event) {
 }
 
 void SendPreShutdownHookToPlugins() {
-  auto plugin_array = PluginLoader::getInstance()->GetPlugInArray();
+  auto plugin_array = PluginLoader::GetInstance()->GetPlugInArray();
   for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
     PlugInContainer* pic = plugin_array->Item(i);
     if (pic->m_enabled && pic->m_init_state) {
       if (pic->m_cap_flag & WANTS_PRESHUTDOWN_HOOK) {
         switch (pic->m_api_version) {
-          case 119: {
+          case 119:
+          case 120: {
             auto* ppi = dynamic_cast<opencpn_plugin_119*>(pic->m_pplugin);
             if (ppi) ppi->PreShutdownHook();
             break;
@@ -311,7 +360,7 @@ void SendPreShutdownHookToPlugins() {
 }
 
 void SendCursorLatLonToAllPlugIns(double lat, double lon) {
-  auto plugin_array = PluginLoader::getInstance()->GetPlugInArray();
+  auto plugin_array = PluginLoader::GetInstance()->GetPlugInArray();
   for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
     PlugInContainer* pic = plugin_array->Item(i);
     if (pic->m_enabled && pic->m_init_state) {
@@ -319,6 +368,9 @@ void SendCursorLatLonToAllPlugIns(double lat, double lon) {
         if (pic->m_pplugin) pic->m_pplugin->SetCursorLatLon(lat, lon);
     }
   }
+  auto msg = std::make_shared<PluginMsg>(
+      PluginMsg("Cursor-pos", Position(lat, lon).to_string()));
+  LogMessage(msg, "application ALL cursor-pos  ");
 }
 
 void SendNMEASentenceToAllPlugIns(const wxString& sentence) {
@@ -339,7 +391,9 @@ void SendNMEASentenceToAllPlugIns(const wxString& sentence) {
   temp.sa_flags = 0;
   sigaction(SIGSEGV, &temp, NULL);
 #endif
-  auto plugin_array = PluginLoader::getInstance()->GetPlugInArray();
+  auto msg = std::make_shared<PluginMsg>("NMEA-msg", sentence.ToStdString());
+  LogMessage(msg, "internal ALL nmea-msg ");
+  auto plugin_array = PluginLoader::GetInstance()->GetPlugInArray();
   for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
     PlugInContainer* pic = plugin_array->Item(i);
     if (pic->m_enabled && pic->m_init_state) {
@@ -370,7 +424,7 @@ void SendNMEASentenceToAllPlugIns(const wxString& sentence) {
 
 int GetJSONMessageTargetCount() {
   int rv = 0;
-  auto plugin_array = PluginLoader::getInstance()->GetPlugInArray();
+  auto plugin_array = PluginLoader::GetInstance()->GetPlugInArray();
   for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
     PlugInContainer* pic = plugin_array->Item(i);
     if (pic->m_enabled && pic->m_init_state &&
@@ -386,7 +440,7 @@ void SendVectorChartObjectInfo(const wxString& chart, const wxString& feature,
   wxString decouple_chart(chart);
   wxString decouple_feature(feature);
   wxString decouple_objname(objname);
-  auto plugin_array = PluginLoader::getInstance()->GetPlugInArray();
+  auto plugin_array = PluginLoader::GetInstance()->GetPlugInArray();
   for (unsigned int i = 0; i < plugin_array->GetCount(); i++) {
     PlugInContainer* pic = (*plugin_array)[i];
     if (pic->m_enabled && pic->m_init_state) {
@@ -399,7 +453,8 @@ void SendVectorChartObjectInfo(const wxString& chart, const wxString& feature,
           case 116:
           case 117:
           case 118:
-          case 119: {
+          case 119:
+          case 120: {
             auto* ppi = dynamic_cast<opencpn_plugin_112*>(pic->m_pplugin);
             if (ppi)
               ppi->SendVectorChartObjectInfo(decouple_chart, decouple_feature,

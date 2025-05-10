@@ -64,7 +64,6 @@
 #include "conn_params_panel.h"
 #include "gui_lib.h"
 #include "nmea0183.h"
-#include "NMEALogWindow.h"
 #include "OCPNPlatform.h"
 #include "ocpn_plugin.h"  // FIXME for GetOCPNScaledFont_PlugIn
 #include "options.h"
@@ -176,11 +175,13 @@ static void LoadSerialPorts(wxComboBox* box) {
 // END_EVENT_TABLE()
 
 // Define constructors
-ConnectionEditDialog::ConnectionEditDialog() {}
+ConnectionEditDialog::ConnectionEditDialog()
+    : m_expandable_icon(this, [&](bool) { std::cout << "click!\n"; }) {}
 
 ConnectionEditDialog::ConnectionEditDialog(wxWindow* parent)
     : wxDialog(parent, wxID_ANY, _("Connection Edit"), wxDefaultPosition,
-               wxSize(560, 840)) {
+               wxSize(560, 840)),
+      m_expandable_icon(this, [&](bool) { std::cout << "click!\n"; }) {
   m_parent = parent;
 
   Init();
@@ -196,13 +197,6 @@ void ConnectionEditDialog::SetInitialSettings(void) {
 }
 
 void ConnectionEditDialog::Init() {
-  MORE = "<span foreground=\'blue\'>";
-  MORE += _("More");
-  MORE += "...</span>";
-  LESS = "<span foreground=\'blue\'>";
-  LESS += _("Less");
-  LESS += "...</span>";
-
   //  For small displays, skip the "More" text.
   // if (g_Platform->getDisplaySize().x < 80 * GetCharWidth()) MORE = "";
 
@@ -266,7 +260,6 @@ void ConnectionEditDialog::Init() {
   bSizer15 = new wxBoxSizer(wxHORIZONTAL);
 
   sbSizerConnectionProps->Add(bSizer15, 0, wxTOP | wxEXPAND, 5);
-  //  bSizer4->Add(bSizerOuterContainer, 1, wxEXPAND, 5);
 
   m_rbTypeSerial =
       new wxRadioButton(m_scrolledwin, wxID_ANY, _("Serial"), wxDefaultPosition,
@@ -602,6 +595,18 @@ void ConnectionEditDialog::Init() {
 
   // Authentication token
 
+  auto flags = wxSizerFlags().Border();
+  m_collapse_box = new wxBoxSizer(wxHORIZONTAL);
+
+  m_collapse_box->Add(
+      new wxStaticText(m_scrolledwin, wxID_ANY, _("Advanced: ")), flags);
+  m_collapse_box->Add(
+      new ExpandableIcon(m_scrolledwin,
+                         [&](bool collapsed) { OnCollapsedToggle(collapsed); }),
+      flags);
+  fgSizer5->Add(m_collapse_box, wxSizerFlags());
+  fgSizer5->Add(new wxStaticText(m_scrolledwin, wxID_ANY, ""));
+
   m_stAuthToken = new wxStaticText(m_scrolledwin, wxID_ANY, _("Auth Token"),
                                    wxDefaultPosition, wxDefaultSize, 0);
   m_stAuthToken->SetMinSize(wxSize(column1width, -1));
@@ -759,11 +764,6 @@ void ConnectionEditDialog::Init() {
   bSizer12->AddSpacer(GetCharWidth() * 5);
 
   sbSizerConnectionProps->AddSpacer(20);
-
-  m_more = new wxStaticText(m_scrolledwin, wxID_ANY, "4 chars",
-                            wxDefaultPosition, wxDefaultSize, wxALIGN_LEFT);
-  m_more->SetLabelMarkup(MORE);
-  sbSizerConnectionProps->Add(m_more, wxSizerFlags().Border());
 
   ConnectControls();
 
@@ -1142,7 +1142,7 @@ void ConnectionEditDialog::ClearNMEAForm(void) {
 
 void ConnectionEditDialog::SetDSFormOptionVizStates(void) {
   bool advanced = m_advanced;
-  m_more->Show(true);
+  m_collapse_box->ShowItems(true);
   m_cbInput->Show();
   m_cbOutput->Show();
   m_cbCheckCRC->Show(advanced);
@@ -1207,7 +1207,7 @@ void ConnectionEditDialog::SetDSFormOptionVizStates(void) {
     m_choicePrecision->Hide();
     m_cbCheckCRC->Hide();
     m_cbGarminHost->Hide();
-    m_more->Hide();
+    m_collapse_box->ShowItems(false);
   }
 
   if (m_rbTypeInternalBT && m_rbTypeInternalBT->GetValue()) {
@@ -1245,7 +1245,7 @@ void ConnectionEditDialog::SetDSFormOptionVizStates(void) {
 
     m_stNetDataProtocol->Hide();
     m_choiceNetDataProtocol->Hide();
-    m_more->Hide();
+    m_collapse_box->Show(false);
   }
 
   if (m_rbTypeNet->GetValue()) {
@@ -1266,7 +1266,7 @@ void ConnectionEditDialog::SetDSFormOptionVizStates(void) {
       m_stNetDataProtocol->Hide();
       m_choiceNetDataProtocol->Hide();
       m_cbGarminHost->Hide();
-      m_more->Hide();
+      m_collapse_box->Show(false);
 
     } else if (m_rbNetProtoSignalK->GetValue()) {
       m_cbMultiCast->Hide();
@@ -1301,7 +1301,7 @@ void ConnectionEditDialog::SetDSFormOptionVizStates(void) {
 
         ShowInFilter(false);
         ShowOutFilter(false);
-        if (m_rbNetProtoTCP->GetValue()) m_more->Hide();
+        if (m_rbNetProtoTCP->GetValue()) m_collapse_box->ShowItems(false);
       }
       if ((DataProtocol)m_choiceNetDataProtocol->GetSelection() ==
           DataProtocol::PROTO_NMEA0183) {
@@ -1692,7 +1692,6 @@ void ConnectionEditDialog::OnCbOutput(wxCommandEvent& event) {
             cp->IOSelect == DS_TYPE_INPUT) {
           //  More: View the filter handler
           m_advanced = true;
-          m_more->SetLabelMarkup(m_advanced ? LESS : MORE);
           SetNMEAFormForNetProtocol();
           LayoutDialog();
 
@@ -1755,10 +1754,8 @@ void ConnectionEditDialog::OnCbMultiCast(wxCommandEvent& event) {
   LayoutDialog();
 }
 
-void ConnectionEditDialog::OnClickMore(wxMouseEvent& event) {
-  // m_cbAdvanced->SetValue(!m_cbAdvanced->IsChecked());
-  m_advanced = !m_advanced;
-  m_more->SetLabelMarkup(m_advanced ? LESS : MORE);
+void ConnectionEditDialog::OnCollapsedToggle(bool collapsed) {
+  m_advanced = !collapsed;
   if (m_rbTypeNet->GetValue())
     SetNMEAFormForNetProtocol();
   else
@@ -1775,16 +1772,18 @@ void ConnectionEditDialog::OnCbAdvanced(wxCommandEvent& event) {
 }
 
 void ConnectionEditDialog::OnShowGpsWindowCheckboxClick(wxCommandEvent& event) {
-  if (!m_cbNMEADebug->GetValue()) {
-    NMEALogWindow::GetInstance().DestroyWindow();
-  } else {
-    NMEALogWindow::GetInstance().Create((wxWindow*)(m_parent->GetParent()), 35);
-
-    // Try to ensure that the log window is at least a little bit visible
-    wxRect logRect(NMEALogWindow::GetInstance().GetPosX(),
-                   NMEALogWindow::GetInstance().GetPosY(),
-                   NMEALogWindow::GetInstance().GetSizeW(),
-                   NMEALogWindow::GetInstance().GetSizeH());
+  //  if (!m_cbNMEADebug->GetValue()) {
+  //    NMEALogWindow::GetInstance().DestroyWindow();
+  //  } else {
+  //    NMEALogWindow::GetInstance().Create((wxWindow*)(m_parent->GetParent()),
+  //    35);
+  //
+  //    // Try to ensure that the log window is at least a little bit visible
+  //    wxRect logRect(NMEALogWindow::GetInstance().GetPosX(),
+  //                   NMEALogWindow::GetInstance().GetPosY(),
+  //                   NMEALogWindow::GetInstance().GetSizeW(),
+  //                   NMEALogWindow::GetInstance().GetSizeH());
+  // FIXME (leamas)
 
 #if 0
     if (m_container->GetRect().Contains(logRect)) {
@@ -1795,8 +1794,8 @@ void ConnectionEditDialog::OnShowGpsWindowCheckboxClick(wxCommandEvent& event) {
       NMEALogWindow::Get().Move();
     }
 #endif
-    m_parent->Raise();
-  }
+  m_parent->Raise();
+  //  }
 }
 void ConnectionEditDialog::SetNMEAFormForSerialProtocol() {
   bool n0183ctlenabled = (DataProtocol)m_choiceSerialProtocol->GetSelection() ==
@@ -2186,10 +2185,6 @@ void ConnectionEditDialog::ConnectControls() {
   m_cbMultiCast->Connect(
       wxEVT_COMMAND_CHECKBOX_CLICKED,
       wxCommandEventHandler(ConnectionEditDialog::OnCbMultiCast), NULL, this);
-  // m_cbAdvanced->Connect(
-  //    wxEVT_COMMAND_CHECKBOX_CLICKED,
-  //    wxCommandEventHandler(ConnectionEditDialog::OnCbAdvanced), NULL, this);
-  m_more->Bind(wxEVT_LEFT_DOWN, &ConnectionEditDialog::OnClickMore, this);
 
   // input/output control
   m_cbInput->Connect(wxEVT_COMMAND_CHECKBOX_CLICKED,

@@ -20,7 +20,9 @@
 #ifndef DIALOG_BASE_H
 #define DIALOG_BASE_H
 
+#include <wx/wx.h>
 #include <wx/dialog.h>
+#include <wx/html/htmlwin.h>
 #include <wx/string.h>
 
 #include "ui_utils.h"
@@ -39,13 +41,8 @@ public:
   void SetInitialSize();
 
   /**
-   * Show dialog and return response.
-   * @return YES/NO response.
-   */
-  int ShowModal() override;
-
-  /**
-   * Display HTML content.
+   * Display HTML content with dark support.
+   * The HTML should contain a <body> tag.
    * @param html HTML document.
    */
   void AddHtmlContent(const std::stringstream& html);

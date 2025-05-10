@@ -70,7 +70,7 @@
 #include "Layer.h"
 #include "navutil.h"
 #include "nmea0183.h"
-#include "NMEALogWindow.h"
+
 #include "ocpndc.h"
 #include "ocpn_frame.h"
 #include "OCPNPlatform.h"
@@ -112,6 +112,7 @@ extern bool g_bFullscreenToolbar;
 extern bool g_bShowLayers;
 extern bool g_bTransparentToolbar;
 extern bool g_bPermanentMOBIcon;
+extern bool g_btenhertz;
 
 extern bool g_bShowDepthUnits;
 extern bool g_bAutoAnchorMark;
@@ -857,6 +858,8 @@ bool ConfigMgr::SaveTemplate(wxString fileName) {
 
   conf->Write(_T ( "CourseUpMode" ), g_bCourseUp);
   if (!g_bInlandEcdis) conf->Write(_T ( "LookAheadMode" ), g_bLookAhead);
+  conf->Write(_T ( "TenHzUpdate" ), g_btenhertz);
+
   conf->Write(_T ( "COGUPAvgSeconds" ), g_COGAvgSec);
   conf->Write(_T ( "UseMagAPB" ), g_bMagneticAPB);
 
@@ -882,6 +885,8 @@ bool ConfigMgr::SaveTemplate(wxString fileName) {
   conf->Write(_T ( "TrackRotateAt" ), g_track_rotate_time);
   conf->Write(_T ( "TrackRotateTimeType" ), g_track_rotate_time_type);
   conf->Write(_T ( "HighlightTracks" ), g_bHighliteTracks);
+
+  conf->Write(_T ( "DateTimeFormat" ), g_datetime_format);
 
   conf->Write(_T ( "InitialStackIndex" ), g_restore_stackindex);
   conf->Write(_T ( "InitialdBIndex" ), g_restore_dbindex);
@@ -1375,6 +1380,8 @@ bool ConfigMgr::CheckTemplate(wxString fileName) {
   CHECK_INT(_T ( "TrackRotateAt" ), &g_track_rotate_time);
   CHECK_INT(_T ( "TrackRotateTimeType" ), &g_track_rotate_time_type);
   CHECK_INT(_T ( "HighlightTracks" ), &g_bHighliteTracks);
+
+  CHECK_STR(_T ( "DateTimeFormat" ), g_datetime_format);
 
   CHECK_FLT(_T ( "PlanSpeed" ), &g_PlanSpeed, 0.1)
 

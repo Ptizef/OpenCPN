@@ -219,7 +219,10 @@ enum {
   ID_AISALERTAUDIO,
   ID_AISALERTDIALOG,
   ID_TEMPUNITSCHOICE,
-  ID_BUTTONMIGRATE
+  ID_BUTTONMIGRATE,
+  ID_TIMEZONE_UTC,
+  ID_TIMEZONE_LOCAL_TIME,
+  ID_TENHZCHECKBOX
 };
 
 /* Define an int bit field for dialog return value
@@ -417,8 +420,17 @@ public:
   wxCheckBox *pOZScaleVector, *pToolbarAutoHideCB, *pInlandEcdis, *pRollover;
   wxCheckBox *pZoomButtons, *pChartBarEX;
   wxTextCtrl *pCOGUPUpdateSecs, *m_pText_OSCOG_Predictor, *pScreenMM;
-  wxTextCtrl *pToolbarHideSecs, *m_pText_OSHDT_Predictor;
+  wxTextCtrl *pToolbarHideSecs, *m_pText_OSHDT_Predictor, *m_pTxt_OwnMMSI;
+  // Radio buttons to control the date/time format.
+  // In the future, other date/time formats may be added here. For example:
+  // 1. Local Mean Time (LMT) at the location.
+  // 2. Custom timezone, such as for route planning purpose.
 
+  /** Specify date/time should be formatted in timezone as configured in the
+   * operating system. */
+  wxRadioButton *pTimezoneLocalTime;
+  /** Specify date/time should be formatted in UTC. */
+  wxRadioButton *pTimezoneUTC;
   wxTextCtrl *pCmdSoundString;
 
   wxChoice *m_pShipIconType, *m_pcTCDatasets;
@@ -574,7 +586,7 @@ public:
   wxTextCtrl *m_pText_TP_Secs, *m_pText_TP_Dist;
   wxCheckBox *pWayPointPreventDragging, *pConfirmObjectDeletion;
   wxCheckBox *pEnableZoomToCursor, *pPreserveScale, *pPlayShipsBells;
-  wxCheckBox *pTransparentToolbar;
+  wxCheckBox *pEnableTenHertz, *pTransparentToolbar;
   wxCheckBox *pAdvanceRouteWaypointOnArrivalOnly, *pTrackShowIcon;
   wxCheckBox *pTrackDaily, *pTrackHighlite;
   wxStaticText *pStatic_CallSign;
@@ -859,9 +871,10 @@ public:
   void OnMMSIEditCancelClick(wxCommandEvent &event);
   void OnMMSIEditOKClick(wxCommandEvent &event);
   void OnCtlUpdated(wxCommandEvent &event);
+  void OnMMSIChanged(wxCommandEvent &event);
 
   MmsiProperties *m_props;
-  wxTextCtrl *m_MMSICtl, m_ShipNameCtl;  // Has ToDo take away?
+  wxTextCtrl *m_MMSICtl, *m_ShipNameCtl;  // Has ToDo take away?
   wxRadioButton *m_rbTypeTrackDefault, *m_rbTypeTrackAlways;
   wxRadioButton *m_rbTypeTrackNever;
   wxCheckBox *m_cbTrackPersist, *m_IgnoreButton, *m_MOBButton, *m_VDMButton,

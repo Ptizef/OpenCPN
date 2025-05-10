@@ -190,6 +190,9 @@ RoutePoint *GPXLoadWaypoint1(pugi::xml_node &wpt_node, wxString def_symbol_name,
               if (!strcmp(attr.name(), "planned_speed"))
                 plan_speed = attr.as_double();
               else if (!strcmp(attr.name(), "etd"))
+                // The timestamp is serialized without timezone information,
+                // e.g., etd="2025-04-03T20:00:27"
+                // So assume the ETD has always been saved in UTC.
                 etd = attr.as_string();
             }
           }
@@ -420,8 +423,8 @@ Track *GPXLoadTrack1(pugi::xml_node &trk_node, bool b_fullviz, bool b_layer,
   }
 
   if (linklist) {
-    delete pTentTrack->m_HyperlinkList;  // created in TrackPoint ctor
-    pTentTrack->m_HyperlinkList = linklist;
+    delete pTentTrack->m_TrackHyperlinkList;  // created in TrackPoint ctor
+    pTentTrack->m_TrackHyperlinkList = linklist;
   }
 
   return pTentTrack;
@@ -801,8 +804,12 @@ static bool GPXCreateWpt(pugi::xml_node node, RoutePoint *pr,
         use.set_value(
             wxString::Format(_T("%.1lf"), pr->GetPlannedSpeed()).mb_str());
       }
-      if (pr->m_manual_etd) {
+      if (pr->m_manual_etd && pr->GetManualETD().IsValid()) {
         pugi::xml_attribute use = child.append_attribute("etd");
+        // Currently, the serialization format is YYYY-MM-DDTHH:MM:SS
+        // without timezone information, e.g., etd="2025-04-03T20:00:27"
+        // TODO: serialize using ISO 8601 or RFC 3339 format to ensure
+        // the serialized date/time is unambiguous.
         use.set_value(pr->GetManualETD().FormatISOCombined().mb_str());
       }
     }
@@ -851,7 +858,7 @@ static bool GPXCreateTrk(pugi::xml_node node, Track *pTrack,
   }
 
   // Hyperlinks
-  HyperlinkList *linklist = pTrack->m_HyperlinkList;
+  HyperlinkList *linklist = pTrack->m_TrackHyperlinkList;
   if (linklist && linklist->GetCount()) {
     wxHyperlinkListNode *linknode = linklist->GetFirst();
     while (linknode) {
@@ -1356,7 +1363,7 @@ bool NavObjectCollection1::CreateAllGPXObjects() {
 
   CreateNavObjGPXPoints();
   CreateNavObjGPXRoutes();
-  CreateNavObjGPXTracks();
+  // CreateNavObjGPXTracks();
 
   return true;
 }
@@ -1486,10 +1493,10 @@ bool NavObjectCollection1::LoadAllGPXObjects(bool b_full_viz,
         wpt_duplicates++;
       }
     } else if (!strcmp(object.name(), "trk")) {
-      Track *pTrack = GPXLoadTrack1(object, b_full_viz, false, false, 0);
-      if (InsertTrack(pTrack) && b_compute_bbox && pTrack->IsVisible()) {
-        // BBox.Expand(pTrack->GetBBox());
-      }
+      // Track *pTrack = GPXLoadTrack1(object, b_full_viz, false, false, 0);
+      // if (InsertTrack(pTrack) && b_compute_bbox && pTrack->IsVisible()) {
+      //  BBox.Expand(pTrack->GetBBox());
+      //}
     } else if (!strcmp(object.name(), "rte")) {
       Route *pRoute = GPXLoadRoute1(object, b_full_viz, false, false, 0, false);
       if (InsertRouteA(pRoute, this) && b_compute_bbox && pRoute->IsVisible()) {
@@ -1538,6 +1545,20 @@ int NavObjectCollection1::LoadAllGPXObjectsAsLayer(int layer_id,
   }
 
   return n_obj;
+}
+
+bool NavObjectCollection1::LoadAllGPXTrackObjects() {
+  pugi::xml_node objects = this->child("gpx");
+
+  for (pugi::xml_node object = objects.first_child(); object;
+       object = object.next_sibling()) {
+    if (!strcmp(object.name(), "trk")) {
+      Track *pTrack = GPXLoadTrack1(object, true, false, false, 0);
+      InsertTrack(pTrack);
+    }
+  }
+
+  return true;
 }
 
 NavObjectChanges::NavObjectChanges(wxString file_name)

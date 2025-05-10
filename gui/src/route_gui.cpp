@@ -630,10 +630,18 @@ int RouteGui::SendToGPS(const wxString &com_name, bool bsend_waypoints,
   if (0 == result)
     msg = _("Route Transmitted.");
   else {
-    if (result == ERR_GARMIN_INITIALIZE)
-      msg = _("Error on Route Upload.  Garmin GPS not connected");
-    else
-      msg = _("Error on Route Upload.  Please check logfiles...");
+    switch (result) {
+      case ERR_GARMIN_INITIALIZE:
+        msg = _("Error on Route Upload. Garmin GPS not connected");
+        break;
+      case ERR_GPS_DRIVER_NOT_AVAILAIBLE:
+        msg = _("Error on Route Upload. GPS driver not available");
+        break;
+      case ERR_GARMIN_SEND_MESSAGE:
+      default:
+        msg = _("Error on Route Upload. Please check logfiles...");
+        break;
+    }
   }
   OCPNMessageBox(NULL, msg, _("OpenCPN Info"), wxOK | wxICON_INFORMATION);
 
@@ -653,8 +661,8 @@ bool RouteGui::OnDelete(wxWindow *parent, const int count) {
     msg = _("Are you sure you want to delete this route?").ToStdString();
   }
 
-  AlertDialog *dialog = new AlertDialog(parent, title, action);
-  dialog->SetMessage(msg);
-  int result = dialog->ShowModal();
-  return result == wxID_YES;
+  AlertDialog dialog(parent, title, action);
+  dialog.SetMessage(msg);
+  int result = dialog.ShowModal();
+  return result == wxID_OK;
 }

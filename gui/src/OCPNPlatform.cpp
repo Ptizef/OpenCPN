@@ -73,7 +73,7 @@
 #include "model/plugin_paths.h"
 #include "model/select.h"
 
-#include "AboutFrameImpl.h"
+#include "about_frame_impl.h"
 #include "about.h"
 #include "displays.h"
 #include "FontMgr.h"
@@ -205,7 +205,7 @@ extern wxArrayString g_locale_catalog_array;
 #endif
 extern int options_lastPage;
 extern AboutFrameImpl *g_pAboutDlg;
-extern about *g_pAboutDlgLegacy;
+extern About *g_pAboutDlgLegacy;
 extern wxColour g_colourTrackLineColour;
 extern int g_n_ownship_min_mm;
 
@@ -1006,14 +1006,14 @@ void OCPNPlatform::SetLocaleSearchPrefixes(void) {
   wxLocale::AddCatalogLookupPathPrefix(locale_location);
 
   // And then for managed plugins
-  std::string dir = PluginPaths::getInstance()->UserDatadir();
+  std::string dir = PluginPaths::GetInstance()->UserDatadir();
   wxString managed_locale_location(dir + "/locale");
   wxLocale::AddCatalogLookupPathPrefix(managed_locale_location);
 #endif
 
 #ifdef __WXOSX__
   std::string macDir =
-      PluginPaths::getInstance()->Homedir() +
+      PluginPaths::GetInstance()->Homedir() +
       "/Library/Application Support/OpenCPN/Contents/Resources";
   wxString Mac_managed_locale_location(macDir);
   wxLocale::AddCatalogLookupPathPrefix(Mac_managed_locale_location);
@@ -2238,54 +2238,6 @@ bool OCPNPlatform::isPlatformCapable(int flag) {
   }
 
   return false;
-#endif
-}
-
-void OCPNPlatform::DoHelpDialog(void) {
-#ifndef __ANDROID__
-  if (!g_pAboutDlg) {
-    g_pAboutDlg = new AboutFrameImpl(gFrame);
-  } else {
-    g_pAboutDlg->SetFocus();
-  }
-  g_pAboutDlg->Show();
-
-#else
-  if (!g_pAboutDlgLegacy)
-    g_pAboutDlgLegacy = new about(gFrame, GetSharedDataDir());
-  else
-    g_pAboutDlgLegacy->SetFocus();
-  g_pAboutDlgLegacy->Show();
-
-#endif
-}
-
-void OCPNPlatform::LaunchLocalHelp(void) {
-#ifdef __ANDROID__
-  androidLaunchHelpView();
-#else
-  wxString def_lang_canonical = _T("en_US");
-
-#if wxUSE_XLOCALE
-  if (plocale_def_lang)
-    def_lang_canonical = plocale_def_lang->GetCanonicalName();
-#endif
-
-  wxString help_locn = g_Platform->GetSharedDataDir() + _T("doc/help_");
-
-  wxString help_try = help_locn + def_lang_canonical + _T(".html");
-
-  if (!::wxFileExists(help_try)) {
-    help_try = help_locn + _T("en_US") + _T(".html");
-
-    if (!::wxFileExists(help_try)) {
-      help_try = help_locn + _T("web") + _T(".html");
-    }
-
-    if (!::wxFileExists(help_try)) return;
-  }
-
-  wxLaunchDefaultBrowser(wxString(_T("file:///")) + help_try);
 #endif
 }
 

@@ -9,6 +9,7 @@
 #include <wx/grid.h>
 #include <wx/panel.h>
 #include <wx/sizer.h>
+#include <wx/spinctrl.h>
 #include <wx/textctrl.h>
 #include <wx/window.h>
 
@@ -29,10 +30,14 @@
 #include "navutil.h"
 #include "priority_gui.h"
 #include "std_filesystem.h"
+#include "svg_utils.h"
+#include "OCPNPlatform.h"
 
 #ifdef __ANDROID__
 #include "androidUTIL.h"
 #endif
+
+extern OCPNPlatform* g_Platform;
 
 static const auto kUtfArrowDown = wxString::FromUTF8(u8"\u25bc");
 static const auto kUtfArrowRight = wxString::FromUTF8(u8"\u25ba");
@@ -50,6 +55,89 @@ static const auto kUtfTrashbin = wxString::FromUTF8(u8"\U0001f5d1");
 static inline bool IsWindows() {
   return wxPlatformInfo::Get().GetOperatingSystemId() & wxOS_WINDOWS;
 }
+
+/** Standard icons bitmaps: settings gear, trash bin, etc. */
+class StdIcons {
+private:
+  const double m_size;
+  const fs::path m_svg_dir;
+
+  /** Return platform dependent icon size. */
+  double GetSize(wxWindow* parent) {
+    double size = parent->GetCharHeight() * (IsWindows() ? 1.3 : 1.0);
+#if wxCHECK_VERSION(3, 1, 2)
+    // Apply scale factor, mostly for Windows. Other platforms
+    // does this in the toolkits, ToDIP() is aware of this.
+    size *= static_cast<double>(parent->ToDIP(100)) / 100.;
+#endif
+    // Force minimum physical size for touch screens
+    if (g_btouch) {
+      double pixel_per_mm =
+          wxGetDisplaySize().x / g_Platform->GetDisplaySizeMM();
+      size = std::max(size, 7.0 * pixel_per_mm);
+    }
+    return size;
+  }
+
+  wxBitmap LoadIcon(const std::string filename) {
+    fs::path path = m_svg_dir / filename;
+    return LoadSVG(path.string(), m_size, m_size);
+  }
+
+public:
+  StdIcons(wxWindow* parent)
+      : m_size(GetSize(parent)),
+        m_svg_dir(fs::path(g_Platform->GetSharedDataDir().ToStdString()) /
+                  "uidata" / "MUI_flat"),
+        trashbin(LoadIcon("trash_bin.svg")),
+        settings(LoadIcon("setting_gear.svg")),
+        filled_circle(LoadIcon("circle-on.svg")),
+        open_circle(LoadIcon("circle-off.svg")),
+        exclaim_mark(LoadIcon("exclaim_mark.svg")),
+        x_mult(LoadIcon("X_mult.svg")),
+        check_mark(LoadIcon("check_mark.svg")) {}
+
+  const wxBitmap trashbin;
+  const wxBitmap settings;
+  const wxBitmap filled_circle;
+  const wxBitmap open_circle;
+  const wxBitmap exclaim_mark;
+  const wxBitmap x_mult;
+  const wxBitmap check_mark;
+};
+
+// Custom renderer class for rendering bitmap in a grid cell
+class BitmapCellRenderer : public wxGridCellRenderer {
+public:
+  BitmapCellRenderer(const wxBitmap& bitmap)
+      : status(ConnState::Disabled), m_bitmap(bitmap) {}
+
+  // Update the bitmap dynamically
+  void SetBitmap(const wxBitmap& bitmap) { m_bitmap = bitmap; }
+
+  void Draw(wxGrid& grid, wxGridCellAttr& attr, wxDC& dc, const wxRect& rect,
+            int row, int col, bool isSelected) {
+    if (IsWindows()) {
+      dc.SetBrush(wxBrush(GetGlobalColor("DILG1")));
+      dc.DrawRectangle(rect);
+    }
+    // Draw the bitmap centered in the cell
+    dc.DrawBitmap(m_bitmap, rect.x + (rect.width - m_bitmap.GetWidth()) / 2,
+                  rect.y + (rect.height - m_bitmap.GetHeight()) / 2, true);
+  }
+
+  wxSize GetBestSize(wxGrid& grid, wxGridCellAttr& attr, wxDC& dc, int row,
+                     int col) {
+    // Return the size of the bitmap as the best size for the cell
+    return wxSize(m_bitmap.GetWidth(), m_bitmap.GetHeight());
+  }
+
+  BitmapCellRenderer* Clone() const { return new BitmapCellRenderer(m_bitmap); }
+  ConnState status;
+
+private:
+  wxBitmap m_bitmap;
+};
 
 /** std::sort support: Compare two ConnectionParams w r t given column */
 class ConnCompare {
@@ -153,7 +241,8 @@ public:
       : wxGrid(parent, wxID_ANY),
         m_connections(connections),
         m_on_conn_delete(on_conn_update),
-        m_last_tooltip_cell(100) {
+        m_last_tooltip_cell(100),
+        m_icons(parent) {
     SetTable(new wxGridStringTable(), false);
     GetTable()->AppendCols(8);
     HideCol(7);
@@ -167,6 +256,7 @@ public:
     }
     HideRowLabels();
     SetColAttributes(parent);
+
     ReloadGrid(connections);
     DisableDragColSize();
     DisableDragRowSize();
@@ -213,6 +303,8 @@ public:
   /** Reload grid using data from given list of connections. */
   void ReloadGrid(const std::vector<ConnectionParams*>& connections) {
     ClearGrid();
+    m_renderer_status_vector.clear();
+
     for (auto it = connections.begin(); it != connections.end(); it++) {
       auto row = static_cast<int>(it - connections.begin());
       EnsureRows(row);
@@ -226,11 +318,16 @@ public:
       SetCellValue(row, 2, (*it)->GetIOTypeValueStr());
       SetCellValue(row, 3, (*it)->GetStrippedDSPort());
       m_tooltips[row][3] = (*it)->UserComment;
-      SetCellValue(row, 5, kUtfGear);  // ⚙
+      SetCellRenderer(row, 5, new BitmapCellRenderer(m_icons.settings));
       m_tooltips[row][5] = _("Edit connection");
-      SetCellValue(row, 6, kUtfTrashbin);  // 🗑
+      SetCellRenderer(row, 6, new BitmapCellRenderer(m_icons.trashbin));
       m_tooltips[row][6] = _("Delete connection");
       SetCellValue(row, 7, (*it)->GetKey());
+
+      auto stat_renderer = new BitmapCellRenderer(m_icons.filled_circle);
+      stat_renderer->status = ConnState::Disabled;
+      m_renderer_status_vector.push_back(stat_renderer);
+      SetCellRenderer(row, 4, stat_renderer);
     }
     OnConnectionChange(m_connections);
     AutoSize();
@@ -378,35 +475,58 @@ private:
 
   /** Handle connections driver statistics status changes event. */
   void OnConnectionChange(const std::vector<ConnectionParams*>& connections) {
+    bool refresh_needed = false;
     for (auto it = connections.begin(); it != connections.end(); it++) {
       ConnState state = m_conn_states.GetDriverState(
           (*it)->GetCommProtocol(), (*it)->GetStrippedDSPort());
       if (!(*it)->bEnabled) state = ConnState::Disabled;
       auto row = static_cast<int>(it - connections.begin());
       EnsureRows(row);
+      if (m_renderer_status_vector.size() < (size_t)(row + 1)) continue;
       switch (state) {
         case ConnState::Disabled:
-          SetCellValue(row, 4, kUtfFilledCircle);
+          if (m_renderer_status_vector[row]->status != ConnState::Disabled) {
+            m_renderer_status_vector[row]->SetBitmap(m_icons.filled_circle);
+            m_renderer_status_vector[row]->status = ConnState::Disabled;
+            refresh_needed = true;
+          }
           m_tooltips[row][4] = _("Disabled");
           break;
         case ConnState::NoStats:
-          SetCellValue(row, 4, kUtfCircle);
+          if (m_renderer_status_vector[row]->status != ConnState::NoStats) {
+            m_renderer_status_vector[row]->SetBitmap(m_icons.open_circle);
+            m_renderer_status_vector[row]->status = ConnState::NoStats;
+            refresh_needed = true;
+          }
           m_tooltips[row][4] = _("No driver statistics available");
           break;
         case ConnState::NoData:
-          SetCellValue(row, 4, kUtfExclamationMark);
+          if (m_renderer_status_vector[row]->status != ConnState::NoData) {
+            m_renderer_status_vector[row]->SetBitmap(m_icons.exclaim_mark);
+            m_renderer_status_vector[row]->status = ConnState::NoData;
+            refresh_needed = true;
+          }
           m_tooltips[row][4] = _("No data flowing through connection");
           break;
         case ConnState::Unavailable:
-          SetCellValue(row, 4, kUtfMultiplyX);
+          if (m_renderer_status_vector[row]->status != ConnState::Unavailable) {
+            m_renderer_status_vector[row]->SetBitmap(m_icons.x_mult);
+            m_renderer_status_vector[row]->status = ConnState::Unavailable;
+            refresh_needed = true;
+          }
           m_tooltips[row][4] = _("The device is unavailable");
           break;
         case ConnState::Ok:
-          SetCellValue(row, 4, kUtfCheckmark);
+          if (m_renderer_status_vector[row]->status != ConnState::Ok) {
+            m_renderer_status_vector[row]->SetBitmap(m_icons.check_mark);
+            m_renderer_status_vector[row]->status = ConnState::Ok;
+            refresh_needed = true;
+          }
           m_tooltips[row][4] = _("Data is flowing");
           break;
       }
     }
+    if (refresh_needed) ForceRefresh();
   }
 
   void SetSortingColumn(int col) {
@@ -511,6 +631,8 @@ private:
   const std::vector<ConnectionParams*>& m_connections;
   EventVar& m_on_conn_delete;
   int m_last_tooltip_cell;
+  StdIcons m_icons;
+  std::vector<BitmapCellRenderer*> m_renderer_status_vector;
 };
 
 /** Indeed: the General  panel. */
@@ -520,13 +642,23 @@ public:
     auto sizer = new wxStaticBoxSizer(wxVERTICAL, this, _("General"));
     SetSizer(sizer);
     auto flags = wxSizerFlags().Border();
-    auto hbox = new wxBoxSizer(wxHORIZONTAL);
-    hbox->Add(new wxStaticText(this, wxID_ANY, _("Upload format:")), flags);
-    hbox->Add(new UploadOptionsChoice(this), flags);
-    sizer->Add(hbox, flags);
+    sizer->Add(new UploadOptionsChoice(this), flags);
+    sizer->Add(new PrioritiesBtn(this), flags);
   }
 
 private:
+  /** Button invokes "Adjust communication priorities" GUI. */
+  class PrioritiesBtn : public wxButton {
+  public:
+    PrioritiesBtn(wxWindow* parent)
+        : wxButton(parent, wxID_ANY, _("Adjust Nav data priorities...")) {
+      Bind(wxEVT_COMMAND_BUTTON_CLICKED, [&](wxCommandEvent&) {
+        PriorityDlg dialog(this);
+        dialog.ShowModal();
+      });
+    }
+  };
+
   /** The select Generic, Garmin or Furuno upload options choice */
   class UploadOptionsChoice : public wxChoice, public ApplyCancel {
   public:
@@ -564,7 +696,8 @@ private:
     }
 
     const std::array<wxString, 3> choices = {
-        _("Generic"), _("Use Garmin GRMN (Host) mode for uploads"),
+        _("Use generic Nmea 0183 format for uploads"),
+        _("Use Garmin GRMN (Host) mode for uploads"),
         _("Format uploads for Furuno GP4X")};
   };
 };
@@ -602,7 +735,7 @@ public:
     sizer->Add(new BearingsCheckbox(this), wxSizerFlags().Expand());
     sizer->Add(new NmeaFilterRow(this), wxSizerFlags().Expand());
     sizer->Add(new TalkerIdRow(this), wxSizerFlags().Expand());
-    sizer->Add(new PrioritiesBtn(this), wxSizerFlags().Border());
+    sizer->Add(new NetmaskRow(this), wxSizerFlags().Expand());
     SetSizer(sizer);
   }
 
@@ -669,6 +802,11 @@ private:
                 wxSizerFlags().Align(wxALIGN_CENTRE_VERTICAL).Border());
       text_ctrl = new wxTextCtrl(this, wxID_ANY, "", wxDefaultPosition,
                                  wxSize(50, 3 * wxWindow::GetCharWidth()));
+      text_ctrl->SetToolTip(
+          _("Enter a two-letter talker ID to override the default ID in NMEA "
+            "sentences generated by OpenCPN (e.g., GP, HC, EC). This affects "
+            "only sentences created by OpenCPN, not those forwarded from other "
+            "devices."));
       text_ctrl->SetValue(g_TalkerIdText);
       hbox->Add(text_ctrl, wxSizerFlags().Border());
       SetSizer(hbox);
@@ -679,15 +817,49 @@ private:
     void Cancel() override { text_ctrl->SetValue(g_TalkerIdText); }
   };
 
-  /** Button invokes "Adjust communication priorities" GUI. */
-  class PrioritiesBtn : public wxButton {
+  /** Global netmask configuration bound to g_netmask_bits. */
+  class NetmaskRow : public wxPanel, public ApplyCancel {
   public:
-    PrioritiesBtn(wxWindow* parent)
-        : wxButton(parent, wxID_ANY, _("Adjust communication priorities...")) {
-      Bind(wxEVT_COMMAND_BUTTON_CLICKED, [&](wxCommandEvent&) {
-        PriorityDlg dialog(this);
-        dialog.ShowModal();
+    NetmaskRow(wxWindow* parent)
+        : wxPanel(parent),
+          m_spin_ctrl(new wxSpinCtrl(this, wxID_ANY)),
+          m_text(new wxStaticText(this, wxID_ANY, "")) {
+      m_spin_ctrl->SetRange(8, 32);
+      auto hbox = new wxBoxSizer(wxHORIZONTAL);
+      auto flags = wxSizerFlags().Align(wxALIGN_CENTRE_VERTICAL).Border();
+      hbox->Add(new wxStaticText(this, wxID_ANY, _("Netmask: ")), flags);
+      hbox->Add(m_text, flags);
+      hbox->Add(new wxStaticText(this, wxID_ANY, _("length (bits): ")), flags);
+      hbox->Add(m_spin_ctrl, flags);
+      SetSizer(hbox);
+      Cancel();
+
+      Bind(wxEVT_SPINCTRL, [&](wxSpinEvent& ev) {
+        m_text->SetLabel(BitsToDottedMask(m_spin_ctrl->GetValue()));
+        Layout();
       });
+    }
+
+    void Apply() override { g_netmask_bits = m_spin_ctrl->GetValue(); }
+
+    void Cancel() override {
+      m_spin_ctrl->SetValue(g_netmask_bits);
+      m_text->SetLabel(BitsToDottedMask(m_spin_ctrl->GetValue()));
+      Layout();
+    }
+
+  private:
+    wxSpinCtrl* m_spin_ctrl;
+    wxStaticText* m_text;
+
+    std::string BitsToDottedMask(unsigned bits) {
+      uint32_t mask = 0xffffffff << (32 - bits);
+      std::stringstream ss;
+      ss << ((mask & 0xff000000) >> 24) << ".";
+      ss << ((mask & 0x00ff0000) >> 16) << ".";
+      ss << ((mask & 0x0000ff00) >> 8) << ".";
+      ss << (mask & 0x000000ff);
+      return ss.str();
     }
   };
 };
@@ -707,7 +879,7 @@ ConnectionsDlg::ConnectionsDlg(
   vbox->Add(scrolled_window, wxSizerFlags(5).Expand().Border());
   vbox->Add(new AddConnectionButton(this, m_evt_add_connection),
             wxSizerFlags().Border());
-  vbox->Add(0, wxWindow::GetCharHeight(), 1);  // Expanding spacer
+  vbox->Add(0, wxWindow::GetCharHeight());  // Expanding spacer
   auto panel_flags = wxSizerFlags().Border(wxLEFT | wxDOWN | wxRIGHT).Expand();
   vbox->Add(new GeneralPanel(this), panel_flags);
 
@@ -735,18 +907,18 @@ ConnectionsDlg::ConnectionsDlg(
   m_add_connection_lstnr.Init(m_evt_add_connection, on_evt_update_connections);
 };
 
+void ConnectionsDlg::OnResize() {
+  Layout();
+  Refresh();
+  Update();
+}
+
 void ConnectionsDlg::DoApply(wxWindow* root) {
   for (wxWindow* child : root->GetChildren()) {
     auto widget = dynamic_cast<ApplyCancel*>(child);
     if (widget) widget->Apply();
     DoApply(child);
   }
-}
-
-void ConnectionsDlg::OnResize() {
-  Layout();
-  Refresh();
-  Update();
 }
 
 void ConnectionsDlg::DoCancel(wxWindow* root) {
